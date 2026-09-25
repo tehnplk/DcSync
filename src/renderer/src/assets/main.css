@@ -1,0 +1,423 @@
+:root {
+  --bg: #f4f7f6;
+  --surface: #fff;
+  --fg: #1c2b27;
+  --muted: #5f716c;
+  --line: #d5e0dc;
+  --primary: #0f8a6a;
+  --danger: #c0392b;
+  color-scheme: light;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.pad {
+  padding: 20px 24px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+fieldset {
+  margin: 0 0 16px;
+  padding: 12px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+label,
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input,
+select {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+}
+
+input:disabled,
+select:disabled {
+  background: var(--bg);
+}
+
+button {
+  padding: 7px 16px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  font: inherit;
+  color: var(--primary);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.start,
+button.stop {
+  min-width: 120px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--primary);
+}
+
+button.stop {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+code {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ok,
+.err {
+  margin: 12px 0 0;
+}
+
+.ok {
+  color: var(--primary);
+}
+
+.err {
+  color: var(--danger);
+}
+
+.log {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.mono {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.chip button {
+  padding: 0 6px;
+  border: 0;
+  line-height: 18px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.chip button:hover {
+  color: var(--danger);
+}
+
+.hits {
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.hits button {
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.hits button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.thdate {
+  position: relative;
+}
+
+.thdate-text {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-align: left;
+  color: var(--fg);
+  background: var(--surface);
+}
+
+.thdate-text:hover,
+.thdate-text[aria-expanded='true'] {
+  border-color: var(--primary);
+}
+
+.cal {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 272px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+}
+
+.cal button {
+  padding: 4px 0;
+  border: 0;
+  color: var(--fg);
+  background: transparent;
+}
+
+.cal button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.cal-head {
+  display: grid;
+  grid-template-columns: 28px 28px 1fr 28px 28px;
+  align-items: center;
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+
+.cal-dow {
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cal-day.today {
+  outline: 1px solid var(--primary);
+}
+
+.cal-day.sel {
+  font-weight: 600;
+  color: #fff !important;
+  background: var(--primary) !important;
+}
+
+.cal-foot {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+.cal-foot button {
+  padding: 4px 12px;
+  color: var(--primary);
+}
+
+/* ===== layout: แถบบน + แท็บ + แผง ===== */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status.on {
+  color: var(--primary);
+}
+
+.status.on i {
+  background: var(--primary);
+}
+
+.banner {
+  margin: 0;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  background: var(--surface);
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 24px 0;
+  border-bottom: 2px solid var(--primary);
+}
+
+.tabs button {
+  margin-bottom: -2px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.tabs button:hover {
+  color: var(--fg);
+  background: var(--surface);
+}
+
+.tabs button[aria-selected='true'] {
+  border-color: var(--primary);
+  font-weight: 600;
+  color: #fff;
+  background: var(--primary);
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;   /* เนื้อหาแท็บยาวเลื่อนในพื้นที่นี้ — แถบบน/แท็บ/token อยู่กับที่ */
+  padding: 16px 24px 8px;
+}
+
+.panel fieldset .hint {
+  margin-bottom: 10px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.log {
+  max-height: none;
+  min-height: 200px;
+}
+
+/* กล่อง token ใต้พื้นที่แท็บ — ตำแหน่งคงที่ทุกแท็บ · เส้นประบอกว่าไม่ใช่ส่วนของแท็บ */
+.tokenwrap {
+  padding: 0 24px 16px;
+}
+
+.token {
+  margin: 0;
+  border-style: dashed;
+}
+
+.ver {
+  font-size: 12px;
+  color: var(--muted);
+}
