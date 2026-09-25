@@ -1,9 +1,9 @@
-import { app, shell, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { app, shell, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
-import { DEFAULT_ICD, type Icd, type Result, type Settings } from '../preload/types'
+import { DEFAULT_ICD, type Icd, type Result, type Settings, type Update } from '../preload/types'
 import { PORT, searchIcd, start, stop, testConn } from './agent'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -56,15 +56,50 @@ const log = (m: string): void =>
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('log', `${new Date().toLocaleTimeString('th-TH')} ${m}`))
 
 /**
- * อัปเดตอัตโนมัติจาก GitHub Releases (electron-builder.yml → publish) — เช็คตอนเปิดโปรแกรม ดาวน์โหลดเบื้องหลัง
- * ติดตั้งตอนปิดโปรแกรม (autoInstallOnAppQuit) + แจ้งเตือนของ Windows · เฉพาะตัวติดตั้งจริง dev ไม่มีไฟล์ app-update.yml
- * ponytail: เช็คครั้งเดียวตอนเปิด — เปิดค้างหลายวันไม่เห็นเวอร์ชันใหม่จนกว่าจะเปิดใหม่ ตั้ง setInterval ถ้าต้องการ
+ * อัปเดตอัตโนมัติจาก GitHub Releases (electron-builder.yml → publish) — ดาวน์โหลดเบื้องหลัง
+ * บอกผู้ใช้ให้เห็น: แถบบนของหน้าต่าง (สถานะ/ปุ่มอัปเดต) + กล่องถาม "ติดตั้งและเปิดใหม่ / ภายหลัง" เมื่อโหลดเสร็จ
+ * ภายหลัง = ติดตั้งตอนปิดโปรแกรม (autoInstallOnAppQuit) · เช็คตอนเปิด แล้วซ้ำทุก 4 ชม. (เปิดค้างทั้งวันก็เจอ)
+ * เฉพาะตัวติดตั้งจริง — dev ทดสอบได้ด้วย DCSYNC_TEST_UPDATE=1 (อ่าน dev-app-update.yml)
  */
+let update: Update | null = null
+const sendUpdate = (): void => BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('update', update))
+let updating = false
+
 function checkUpdates(): void {
-  autoUpdater.on('update-available', (i) => log(`พบเวอร์ชันใหม่ ${i.version} กำลังดาวน์โหลด…`))
-  autoUpdater.on('update-downloaded', (i) => log(`ดาวน์โหลดเวอร์ชัน ${i.version} แล้ว — จะติดตั้งเมื่อปิดโปรแกรม`))
+  if (updating) return   // หน้าต่างโหลดใหม่ (F5) ไม่ต้องผูก event ซ้ำ
+  updating = true
+  autoUpdater.on('update-available', (i) => {
+    update = { state: 'downloading', version: i.version, percent: 0 }
+    sendUpdate()
+    log(`พบเวอร์ชันใหม่ ${i.version} กำลังดาวน์โหลด…`)
+  })
+  autoUpdater.on('download-progress', (p) => {
+    if (update?.state === 'downloading') {
+      update = { ...update, percent: Math.round(p.percent) }
+      sendUpdate()
+    }
+  })
+  autoUpdater.on('update-downloaded', async (i) => {
+    update = { state: 'ready', version: i.version }
+    sendUpdate()
+    log(`ดาวน์โหลดเวอร์ชัน ${i.version} แล้ว — กด "อัปเดต" ที่แถบบน หรือจะติดตั้งเองตอนปิดโปรแกรม`)
+    const win = BrowserWindow.getAllWindows()[0]
+    const opt = {
+      type: 'info' as const,
+      title: 'อัปเดต DcSync',
+      message: `DcSync เวอร์ชัน ${i.version} พร้อมติดตั้ง`,
+      detail: 'ติดตั้งตอนนี้: โปรแกรมจะปิดแล้วเปิดใหม่เอง (หยุดให้บริการไม่กี่วินาที)\nภายหลัง: ติดตั้งให้ตอนปิดโปรแกรม',
+      buttons: ['ติดตั้งและเปิดใหม่', 'ภายหลัง'],
+      defaultId: 0,
+      cancelId: 1
+    }
+    const r = win ? await dialog.showMessageBox(win, opt) : await dialog.showMessageBox(opt)
+    if (r.response === 0) autoUpdater.quitAndInstall(true, true)
+  })
   autoUpdater.on('error', (e) => log(`เช็คอัปเดตไม่สำเร็จ: ${e.message}`))
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {})   // ออฟไลน์/ไม่มี release ก็ทำงานต่อได้ ข้อความไปที่ error ข้างบน
+  const check = (): void => void autoUpdater.checkForUpdates().catch(() => {})   // ออฟไลน์ก็ทำงานต่อ ข้อความไปที่ error
+  check()
+  setInterval(check, 4 * 60 * 60 * 1000)
 }
 
 function createWindow(): void {
@@ -84,8 +119,11 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
-  // เช็คหลังหน้าโหลดเสร็จ ข้อความอัปเดตจะได้ขึ้นในแท็บบันทึกการทำงาน
-  if (app.isPackaged) mainWindow.webContents.once('did-finish-load', checkUpdates)
+  // เช็คหลังหน้าโหลดเสร็จ สถานะอัปเดตจะได้ขึ้นที่แถบบน
+  if (app.isPackaged || process.env.DCSYNC_TEST_UPDATE) {
+    autoUpdater.forceDevUpdateConfig = !app.isPackaged
+    mainWindow.webContents.once('did-finish-load', checkUpdates)
+  }
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -119,6 +157,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('settings:get', () => settings)
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('update:get', () => update)
+  ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(true, true))
   ipcMain.handle('settings:save', (_, s: Settings) => save(s))
   ipcMain.handle('token:new', () => newToken())
   ipcMain.handle('icd:search', async (_, s: Settings, q: string): Promise<{ ok: true; rows: Icd[] } | Result> => {

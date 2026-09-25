@@ -33,3 +33,6 @@ export type Settings = {
 }
 
 export type Result = { ok: boolean; message: string }
+
+/** สถานะอัปเดตที่แถบบนแสดง — null = ไม่มีเวอร์ชันใหม่ */
+export type Update = { state: 'downloading'; version: string; percent: number } | { state: 'ready'; version: string }

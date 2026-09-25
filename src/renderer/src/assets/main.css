@@ -421,3 +421,17 @@ code {
   font-size: 12px;
   color: var(--muted);
 }
+
+.upd {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ปุ่มอัปเดตเด่นกว่าปุ่มอื่นบนแถบ — ผู้ใช้ต้องเห็นว่ามีเวอร์ชันใหม่ */
+.upd-btn {
+  padding: 5px 12px;
+  border-color: #b45309;
+  font-weight: 600;
+  color: #fff;
+  background: #d97706;
+}

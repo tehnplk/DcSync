@@ -1,0 +1,4 @@
+# ใช้ตอนทดสอบอัปเดตใน dev เท่านั้น (DCSYNC_TEST_UPDATE=1) — ตัวติดตั้งจริงใช้ app-update.yml ที่ electron-builder สร้างให้
+provider: github
+owner: tehnplk
+repo: DcSync

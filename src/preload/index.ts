@@ -1,9 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Icd, Result, Settings } from './types'
+import type { Icd, Result, Settings, Update } from './types'
 
 const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   version: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  getUpdate: (): Promise<Update | null> => ipcRenderer.invoke('update:get'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  onUpdate: (cb: (u: Update | null) => void): (() => void) => {
+    const h = (_: unknown, u: Update | null): void => cb(u)
+    ipcRenderer.on('update', h)
+    return () => ipcRenderer.removeListener('update', h)
+  },
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),
   test: (s: Settings): Promise<Result> => ipcRenderer.invoke('db:test', s),
   start: (s: Settings): Promise<Result> => ipcRenderer.invoke('server:start', s),

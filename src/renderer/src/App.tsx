@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { DEFAULT_ICD, type Engine, type Icd, type Result, type Settings } from '../../preload/types'
+import { DEFAULT_ICD, type Engine, type Icd, type Result, type Settings, type Update } from '../../preload/types'
 
 const PORTS: Record<Engine, number> = { mysql: 3306, postgres: 5432 }
 
@@ -18,11 +18,15 @@ function App(): React.JSX.Element {
   const [logs, setLogs] = useState<string[]>([])
   const [tab, setTab] = useState<Tab>('his')
   const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<Update | null>(null)
 
   useEffect(() => {
     window.api.getSettings().then(setS)
     window.api.version().then(setVersion)
-    return window.api.onLog((m) => setLogs((l) => [m, ...l].slice(0, 100)))
+    window.api.getUpdate().then(setUpdate)
+    const offUpdate = window.api.onUpdate(setUpdate)
+    const offLog = window.api.onLog((m) => setLogs((l) => [m, ...l].slice(0, 100)))
+    return () => { offUpdate(); offLog() }
   }, [])
 
   // บันทึกทุกครั้งที่แก้ — ระหว่าง Start อยู่ เปลี่ยนช่วงวันที่แล้ว /patients ใช้ค่าใหม่ทันที
@@ -65,6 +69,14 @@ function App(): React.JSX.Element {
       <header className="topbar">
         <h1>DcSync</h1>
         {version && <span className="ver">v{version}</span>}
+        {update?.state === 'downloading' && (
+          <span className="upd">กำลังดาวน์โหลดเวอร์ชัน {update.version} ({update.percent}%)</span>
+        )}
+        {update?.state === 'ready' && (
+          <button type="button" className="upd-btn" onClick={() => window.api.installUpdate()}>
+            อัปเดตเป็น {update.version}
+          </button>
+        )}
         <span className={`status ${running ? 'on' : ''}`}>
           <i aria-hidden />{running ? 'กำลังให้บริการที่ localhost:5000' : 'หยุดอยู่'}
         </span>
