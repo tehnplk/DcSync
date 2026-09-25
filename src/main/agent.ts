@@ -23,10 +23,10 @@ export const ICD_RE = /^[A-Z][0-9A-Z]{1,6}$/
 const marks = (n: number): string => Array(n).fill('?').join(',')
 
 // เขียนให้รันได้ทั้ง MySQL/MariaDB และ PostgreSQL — จัดรูปวันที่/เวลาใน JS ไม่ใช้ฟังก์ชันเฉพาะของแต่ละ DB
+// ไม่ใช้ window function (row_number() over) — HOSxP หลายแห่งยังเป็น MySQL 5.x / MariaDB < 10.2 ที่ไม่รองรับ
+// จึงดึงแถวที่เข้าเกณฑ์ทั้งหมด แล้วเลือกแถวใน JS (pickRows)
 // OPD: dx อยู่ที่ ovstdiag (key vn) · IPD: dx จำหน่ายอยู่ที่ iptdiag (key an) ต่อกลับหา vn ผ่าน ipt.vn
 // ประเภทจำหน่าย: IPD = ipt.dchtype (dchtype) · OPD = ovst.ovstost (ovstost)
-// visit เดียวเจอหลายแถว เลือก IPD ก่อน แล้ว diagtype ต่ำสุด (1 = principal)
-// คนเดียววันเดียวมาหลาย visit เอา visit สุดท้าย (เวลาล่าสุด แล้ว vn มากสุด)
 const sqlFor = (n: number): string => `
 select
   case when d.src = 1 or o.an > '' then 'IPD' else 'OPD' end as patient_type,
@@ -39,22 +39,16 @@ select
   p.addrpart as addr_no, p.road as addr_road,
   concat(p.chwpart, p.amppart, p.tmbpart, lpad(coalesce(p.moopart, '0'), 2, '0')) as area_code,
   sc.cc, sc.hpi,
-  p.informname as kin_name, p.informtel as kin_tel, p.informrelation as kin_relation
+  p.informname as kin_name, p.informtel as kin_tel, p.informrelation as kin_relation,
+  d.src, d.diagtype
 from (
-  select e.*, row_number() over (partition by e.hn, e.dx_date order by e.dx_time desc, e.vn desc) as last_rn
-  from (
-    select c.*, row_number() over (partition by c.vn order by c.src, c.diagtype, c.icd10) as rn
-    from (
-      select 1 as src, t.an, t.vn, t.hn, x.icd10, x.diagtype, t.regdate as dx_date, t.regtime as dx_time
-      from iptdiag x join ipt t on t.an = x.an
-      where x.icd10 in (${marks(n)}) and t.regdate between ? and ?
-      union all
-      select 2, null, x.vn, x.hn, x.icd10, x.diagtype, x.vstdate, x.vsttime
-      from ovstdiag x
-      where x.icd10 in (${marks(n)}) and x.vstdate between ? and ?
-    ) c
-  ) e
-  where e.rn = 1
+  select 1 as src, t.an, t.vn, t.hn, x.icd10, x.diagtype, t.regdate as dx_date, t.regtime as dx_time
+  from iptdiag x join ipt t on t.an = x.an
+  where x.icd10 in (${marks(n)}) and t.regdate between ? and ?
+  union all
+  select 2, null, x.vn, x.hn, x.icd10, x.diagtype, x.vstdate, x.vsttime
+  from ovstdiag x
+  where x.icd10 in (${marks(n)}) and x.vstdate between ? and ?
 ) d
 join patient p         on p.hn = d.hn
 left join icd101 i     on i.code = d.icd10
@@ -63,9 +57,34 @@ left join vn_stat v    on v.vn = d.vn
 left join opdscreen sc on sc.vn = d.vn
 left join ipt a        on a.an = coalesce(d.an, nullif(o.an, ''))
 left join dchtype dt   on dt.dchtype = a.dchtype
-left join ovstost os   on os.ovstost = o.ovstost
-where d.last_rn = 1
-order by d.dx_date desc, d.dx_time desc`
+left join ovstost os   on os.ovstost = o.ovstost`
+
+type Row = Record<string, unknown>
+const t = (v: unknown): string => (v == null ? '' : String(v))
+
+/**
+ * เลือกแถว (แทน window function):
+ * 1. visit เดียวเจอหลายแถว → IPD ก่อน (src 1) แล้ว diagtype ต่ำสุด (1 = principal) แล้วรหัสน้อยสุด
+ * 2. คนเดียววันเดียวมาหลาย visit → visit สุดท้าย (เวลาล่าสุด แล้ว vn มากสุด)
+ * เรียงผลใหม่สุดก่อน
+ */
+export function pickRows(rows: Row[]): Row[] {
+  const byVn = new Map<string, Row>()
+  const rank = (r: Row): string => `${t(r.src)}|${t(r.diagtype).padStart(3, '0')}|${t(r.icd10)}`
+  for (const r of rows) {
+    const b = byVn.get(t(r.vn))
+    if (!b || rank(r) < rank(b)) byVn.set(t(r.vn), r)
+  }
+  const byDay = new Map<string, Row>()
+  const late = (r: Row): string => `${t(r.dx_time)}|${t(r.vn)}`
+  for (const r of byVn.values()) {
+    const k = `${t(r.hn)}|${t(r.dx_date).slice(0, 10)}`
+    const b = byDay.get(k)
+    if (!b || late(r) > late(b)) byDay.set(k, r)
+  }
+  return [...byDay.values()].sort((a, b) =>
+    `${t(b.dx_date).slice(0, 10)} ${t(b.dx_time)}`.localeCompare(`${t(a.dx_date).slice(0, 10)} ${t(a.dx_time)}`))
+}
 
 // DATE/TIMESTAMP ของ pg ให้คืนเป็นสตริง ไม่งั้นโดนแปลง timezone เลื่อนวัน
 for (const oid of [1082, 1114, 1184]) pg.types.setTypeParser(oid, (v) => v)
@@ -179,7 +198,7 @@ export async function searchIcd(c: Conn, q: string): Promise<Icd[]> {
 export async function patients(c: Conn, from: string, to: string, icd: string[]): Promise<Record<string, unknown>[]> {
   const codes = icd.filter((x) => ICD_RE.test(x))
   if (!codes.length) return []   // ไม่ได้เลือกรหัส = ไม่มีคนไข้ (และ in () ว่างเป็น SQL ผิด)
-  const rows = await query(c, sqlFor(codes.length), [...codes, from, to, ...codes, from, to])
+  const rows = pickRows(await query(c, sqlFor(codes.length), [...codes, from, to, ...codes, from, to]))
   const lab = await labs(c, [...new Set(rows.map((r) => String(r.hn)))], from, to)
   return rows.map((r) => {
     const dx = str(r.dx_date)?.slice(0, 10)
