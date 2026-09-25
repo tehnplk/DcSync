@@ -6,7 +6,7 @@
 
 ## ติดตั้ง
 
-ดาวน์โหลด `dcsync-<version>-setup.exe` จาก [Releases](https://github.com/tehnplk/DcSync/releases) แล้วติดตั้ง
+ดาวน์โหลด `DcSync-Setup.exe` (เวอร์ชันล่าสุด) จาก [Releases](https://github.com/tehnplk/DcSync/releases) แล้วติดตั้ง
 เวอร์ชันถัดไปอัปเดตเอง: เปิดโปรแกรมแล้วดาวน์โหลดเบื้องหลัง ติดตั้งตอนปิดโปรแกรม
 
 ## ใช้งาน

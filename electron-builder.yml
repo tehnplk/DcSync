@@ -15,7 +15,8 @@ win:
   executableName: DcSync
   target: nsis
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  # ชื่อคงที่ — ลิงก์ releases/latest/download/DcSync-Setup.exe (ปุ่มในเว็บ dc) ได้เวอร์ชันล่าสุดเสมอ
+  artifactName: DcSync-Setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
