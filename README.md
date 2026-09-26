@@ -18,7 +18,7 @@
 API (รับเฉพาะเครื่องนี้ 127.0.0.1 และเว็บที่อนุญาต):
 
 - `GET /health`
-- `GET /patients` — header `Authorization: Bearer <token>` · ใส่ `?from=yyyy-mm-dd&to=yyyy-mm-dd` ทับช่วงวันที่ได้
+- `GET /patients?name=...&vstdate=yyyy-mm-dd` — header `Authorization: Bearer <token>` · ค้นคนไข้ทุก visit ของวันนั้นด้วยชื่อ/สกุล (บังคับ `name` · หลายคำคั่นช่องว่าง ทุกคำต้องเจอ) · ไม่กรองรหัสโรค · ไม่เกิน 50 ราย · ใช้ `?from=&to=` แทน `vstdate` เป็นช่วงวันที่ได้
 
 ## พัฒนา
 

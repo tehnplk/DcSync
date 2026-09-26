@@ -20,14 +20,18 @@ export const DISEASES: Record<string, string> = {
 
 // รหัสที่ผู้ใช้ตั้งมาจากหน้าโปรแกรม — ส่งเป็นพารามิเตอร์ ไม่ต่อสตริงเข้า SQL
 export const ICD_RE = /^[A-Z][0-9A-Z]{1,6}$/
-const marks = (n: number): string => Array(n).fill('?').join(',')
+
+/** ผลค้นสูงสุดต่อครั้ง — เว็บ dc บอกให้พิมพ์ละเอียดขึ้นเมื่อได้ครบจำนวนนี้ (HIS_MAX ใน src/lib/his.ts) */
+export const MAX_ROWS = 50
 
 // เขียนให้รันได้ทั้ง MySQL/MariaDB และ PostgreSQL — จัดรูปวันที่/เวลาใน JS ไม่ใช้ฟังก์ชันเฉพาะของแต่ละ DB
 // ไม่ใช้ window function (row_number() over) — HOSxP หลายแห่งยังเป็น MySQL 5.x / MariaDB < 10.2 ที่ไม่รองรับ
-// จึงดึงแถวที่เข้าเกณฑ์ทั้งหมด แล้วเลือกแถวใน JS (pickRows)
+// จึงดึงแถวทั้งหมด แล้วเลือกแถวใน JS (pickRows)
+// ค้นด้วยชื่อ ไม่กรองรหัสโรค — ตั้งต้นจาก visit (ovst / ipt) แล้ว left join dx ให้เจอคนที่หมอยังไม่ลงรหัสด้วย
 // OPD: dx อยู่ที่ ovstdiag (key vn) · IPD: dx จำหน่ายอยู่ที่ iptdiag (key an) ต่อกลับหา vn ผ่าน ipt.vn
 // ประเภทจำหน่าย: IPD = ipt.dchtype (dchtype) · OPD = ovst.ovstost (ovstost)
-const sqlFor = (n: number): string => `
+// w = จำนวนคำของชื่อที่ค้น (อย่างน้อย 1) — ทุกคำต้องเจอในชื่อหรือสกุล (พิมพ์ "สมชาย ใจดี" ได้)
+const sqlFor = (w: number): string => `
 select
   case when d.src = 1 or o.an > '' then 'IPD' else 'OPD' end as patient_type,
   d.icd10, i.name as diag_name, coalesce(d.an, nullif(o.an, '')) as an, d.vn, d.hn, p.cid,
@@ -43,12 +47,12 @@ select
   d.src, d.diagtype
 from (
   select 1 as src, t.an, t.vn, t.hn, x.icd10, x.diagtype, t.regdate as dx_date, t.regtime as dx_time
-  from iptdiag x join ipt t on t.an = x.an
-  where x.icd10 in (${marks(n)}) and t.regdate between ? and ?
+  from ipt t left join iptdiag x on x.an = t.an
+  where t.regdate between ? and ?
   union all
-  select 2, null, x.vn, x.hn, x.icd10, x.diagtype, x.vstdate, x.vsttime
-  from ovstdiag x
-  where x.icd10 in (${marks(n)}) and x.vstdate between ? and ?
+  select 2, null, v.vn, v.hn, x.icd10, x.diagtype, v.vstdate, v.vsttime
+  from ovst v left join ovstdiag x on x.vn = v.vn
+  where v.vstdate between ? and ?
 ) d
 join patient p         on p.hn = d.hn
 left join icd101 i     on i.code = d.icd10
@@ -57,32 +61,39 @@ left join vn_stat v    on v.vn = d.vn
 left join opdscreen sc on sc.vn = d.vn
 left join ipt a        on a.an = coalesce(d.an, nullif(o.an, ''))
 left join dchtype dt   on dt.dchtype = a.dchtype
-left join ovstost os   on os.ovstost = o.ovstost`
+left join ovstost os   on os.ovstost = o.ovstost
+where ${Array(w).fill('(p.fname like ? or p.lname like ?)').join(' and ')}`
 
 type Row = Record<string, unknown>
 const t = (v: unknown): string => (v == null ? '' : String(v))
 
 /**
- * เลือกแถว (แทน window function):
- * 1. visit เดียวเจอหลายแถว → IPD ก่อน (src 1) แล้ว diagtype ต่ำสุด (1 = principal) แล้วรหัสน้อยสุด
- * 2. คนเดียววันเดียวมาหลาย visit → visit สุดท้าย (เวลาล่าสุด แล้ว vn มากสุด)
- * เรียงผลใหม่สุดก่อน
+ * เลือกแถว (แทน window function): 1 visit = 1 แถว
+ * แถวที่มีรหัสโรคก่อน (IPD ที่ยังไม่ลง iptdiag ต้องไม่ทับ dx ของ OPD visit เดียวกัน)
+ * แล้ว IPD ก่อน (src 1) แล้ว diagtype ต่ำสุด (1 = principal) แล้วรหัสน้อยสุด
+ * คนเดียวหลาย visit แสดงทุก visit — ผู้ใช้ค้นด้วยชื่อแล้วเลือก visit ที่ใช่เอง · เรียงใหม่สุดก่อน
+ * diags = ทุกรหัสของ visit นั้น (1 visit วินิจฉัยได้หลายโรค) เฉพาะที่ขึ้นต้นด้วยอักษรอังกฤษ A–Y
+ * ไม่เอา Z (รหัสบริการ/ปัจจัย ไม่ใช่โรค) และรหัสที่ขึ้นต้นด้วยตัวเลข/อักษรอื่น (หัตถการ ICD9 ฯลฯ)
+ * เรียงตาม diagtype (1 principal, 2 comorbidity, 3 complication, …) แล้ว IPD ก่อน แล้วรหัส · รหัสเดียวกันที่ลงทั้ง OPD และ IPD เหลือตัวเดียว (ตัวที่ diagtype ต่ำสุด)
  */
 export function pickRows(rows: Row[]): Row[] {
   const byVn = new Map<string, Row>()
-  const rank = (r: Row): string => `${t(r.src)}|${t(r.diagtype).padStart(3, '0')}|${t(r.icd10)}`
+  const dxOf = new Map<string, Row[]>()
+  const rank = (r: Row): string => `${r.icd10 ? 0 : 1}|${t(r.src)}|${t(r.diagtype).padStart(3, '0')}|${t(r.icd10)}`
   for (const r of rows) {
-    const b = byVn.get(t(r.vn))
-    if (!b || rank(r) < rank(b)) byVn.set(t(r.vn), r)
+    const k = t(r.vn)
+    const b = byVn.get(k)
+    if (!b || rank(r) < rank(b)) byVn.set(k, r)
+    if (/^[A-Y]/i.test(t(r.icd10))) dxOf.set(k, [...(dxOf.get(k) ?? []), r])
   }
-  const byDay = new Map<string, Row>()
-  const late = (r: Row): string => `${t(r.dx_time)}|${t(r.vn)}`
-  for (const r of byVn.values()) {
-    const k = `${t(r.hn)}|${t(r.dx_date).slice(0, 10)}`
-    const b = byDay.get(k)
-    if (!b || late(r) > late(b)) byDay.set(k, r)
+  const diags = (k: string): { code: string; name?: string }[] => {
+    const m = new Map<string, string | undefined>()
+    const byType = (r: Row): string => `${t(r.diagtype).padStart(3, '0')}|${t(r.src)}|${t(r.icd10)}`
+    for (const r of (dxOf.get(k) ?? []).sort((a, b) => byType(a).localeCompare(byType(b))))
+      if (!m.has(t(r.icd10))) m.set(t(r.icd10), r.diag_name == null ? undefined : String(r.diag_name))
+    return [...m].map(([code, name]) => ({ code, name }))
   }
-  return [...byDay.values()].sort((a, b) =>
+  return [...byVn.entries()].map(([k, r]): Row => ({ ...r, diags: diags(k) })).sort((a, b) =>
     `${t(b.dx_date).slice(0, 10)} ${t(b.dx_time)}`.localeCompare(`${t(a.dx_date).slice(0, 10)} ${t(a.dx_time)}`))
 }
 
@@ -195,10 +206,13 @@ export async function searchIcd(c: Conn, q: string): Promise<Icd[]> {
 }
 
 /** แถวตามสัญญา HisPatient ของเว็บ dc + ช่องอื่นของฟอร์มแจ้งเคส */
-export async function patients(c: Conn, from: string, to: string, icd: string[]): Promise<Record<string, unknown>[]> {
-  const codes = icd.filter((x) => ICD_RE.test(x))
-  if (!codes.length) return []   // ไม่ได้เลือกรหัส = ไม่มีคนไข้ (และ in () ว่างเป็น SQL ผิด)
-  const rows = pickRows(await query(c, sqlFor(codes.length), [...codes, from, to, ...codes, from, to]))
+export async function patients(c: Conn, from: string, to: string, name: string): Promise<Record<string, unknown>[]> {
+  // เหลือแค่ไทย + ASCII — ฐาน HOSxP หลายแห่งเป็น tis620 ตัวอื่น (emoji, é) ทำ like พัง "Illegal mix of collations"
+  const words = name.replace(/[^฀-๿\x21-\x7E]+/g, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 3)
+  if (!words.length) return []   // ไม่มีชื่อ = ไม่ส่งรายชื่อคนไข้ทั้งวันออกไป
+  const like = words.flatMap((w) => [`%${w}%`, `%${w}%`])
+  // พิมพ์สั้น ๆ อย่าง "สม" เจอเป็นร้อย — ตัดที่ MAX_ROWS (ใหม่สุดก่อน) ให้พิมพ์ละเอียดขึ้นแทน
+  const rows = pickRows(await query(c, sqlFor(words.length), [from, to, from, to, ...like])).slice(0, MAX_ROWS)
   const lab = await labs(c, [...new Set(rows.map((r) => String(r.hn)))], from, to)
   return rows.map((r) => {
     const dx = str(r.dx_date)?.slice(0, 10)
@@ -212,6 +226,7 @@ export async function patients(c: Conn, from: string, to: string, icd: string[])
       disease_code: DISEASES[String(r.icd10)],
       diag_code: r.icd10,
       diag_name: str(r.diag_name),
+      diags: r.diags,
       an: str(r.an),
       discharge_type: str(r.discharge_type),
       vn: str(r.vn),
@@ -293,13 +308,17 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
         log('GET /patients ปฏิเสธ: token ไม่ถูกต้อง')
         return send(401, { error: 'invalid token' })
       }
-      // ?from=&to= ทับช่วงที่ตั้งไว้ในโปรแกรมได้
-      const from = url.searchParams.get('from') ?? s.from
-      const to = url.searchParams.get('to') ?? s.to
-      if (!DATE.test(from) || !DATE.test(to)) return send(400, { error: 'from/to ต้องเป็น yyyy-mm-dd' })
+      // ?name= ค้นชื่อ/สกุล (บังคับ) · ?vstdate= = วันรับบริการวันเดียว · ?from=&to= ทับช่วงที่ตั้งไว้ในโปรแกรมได้
+      const vstdate = url.searchParams.get('vstdate')
+      const from = vstdate ?? url.searchParams.get('from') ?? s.from
+      const to = vstdate ?? url.searchParams.get('to') ?? s.to
+      const name = (url.searchParams.get('name') ?? '').slice(0, 100)
+      if (!name.trim()) return send(400, { error: 'ต้องระบุ name' })
+      if (!DATE.test(from) || !DATE.test(to)) return send(400, { error: 'วันที่ต้องเป็น yyyy-mm-dd' })
       try {
-        const rows = await patients(s.conn, from, to, s.icd10.map((i) => i.code))
-        log(`GET /patients ${from} ถึง ${to} → ${rows.length} ราย`)
+        const rows = await patients(s.conn, from, to, name)
+        // ไม่ลงชื่อที่ค้นในบันทึก — เป็นข้อมูลคนไข้
+        log(`GET /patients ${from} ถึง ${to} (ค้นชื่อ) → ${rows.length} ราย`)
         return send(200, rows)
       } catch (e) {
         log(`GET /patients ผิดพลาด: ${(e as Error).message}`)

@@ -1,6 +1,6 @@
 {
   "name": "dcsync",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "DcSync — ดึงเคสโรคที่ต้องรายงานจาก HIS (HOSxP) ให้เว็บ dc ผ่าน REST บน localhost",
   "main": "./out/main/index.js",
   "author": "tehnplk",
