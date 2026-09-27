@@ -317,7 +317,7 @@ function IcdPicker({ s, value, onChange }: { s: Settings; value: Icd[]; onChange
     <fieldset>
       <legend>รหัส ICD10 ที่ดึง ({value.length})</legend>
       <div className="chips">
-        {value.length === 0 && <span className="hint">ยังไม่ได้เลือกรหัส — /patients จะไม่มีคนไข้</span>}
+        {value.length === 0 && <span className="hint">ยังไม่ได้เลือกรหัส — /patients/scope จะไม่มีคนไข้</span>}
         {value.map((v) => (
           <span key={v.code} className="chip" title={v.name}>
             <b className="mono">{v.code}</b> {v.name}

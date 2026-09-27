@@ -19,6 +19,8 @@ API (รับทุก IP ในแลน พอร์ตตั้งที่�
 
 - `GET /health`
 - `GET /patients?name=...&vstdate=yyyy-mm-dd` — header `Authorization: Bearer <token>` · ค้นคนไข้ทุก visit ของวันนั้นด้วยชื่อ/สกุล (บังคับ `name` · หลายคำคั่นช่องว่าง ทุกคำต้องเจอ) · ไม่กรองรหัสโรค · ไม่เกิน 50 ราย · ใช้ `?from=&to=` แทน `vstdate` เป็นช่วงวันที่ได้
+- `GET /patients/scope?vstdate=yyyy-mm-dd&dx_code=A90&dx_code=A91` — header `Authorization: Bearer <token>` · ทุก visit ของวันนั้นที่มี dx ตัวใดตัวหนึ่งตรง `dx_code` (array: ส่งซ้ำหลายตัว หรือคั่น `,` · ไม่ส่ง = รหัสที่ตั้งในแท็บ **ข้อมูลที่ดึง**) · ไม่ต้องใส่ชื่อ · ไม่จำกัดจำนวน · แถวรูปแบบเดียวกับ `/patients`
+- `GET /health` คืน `dx_code` = รหัสที่ตั้งในแท็บ **ข้อมูลที่ดึง** ด้วย (เว็บ dc ใช้เป็นค่าตั้งต้น)
 
 ## พัฒนา
 

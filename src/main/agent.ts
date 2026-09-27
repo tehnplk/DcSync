@@ -29,11 +29,12 @@ export const MAX_ROWS = 50
 // เขียนให้รันได้ทั้ง MySQL/MariaDB และ PostgreSQL — จัดรูปวันที่/เวลาใน JS ไม่ใช้ฟังก์ชันเฉพาะของแต่ละ DB
 // ไม่ใช้ window function (row_number() over) — HOSxP หลายแห่งยังเป็น MySQL 5.x / MariaDB < 10.2 ที่ไม่รองรับ
 // จึงดึงแถวทั้งหมด แล้วเลือกแถวใน JS (pickRows)
-// ค้นด้วยชื่อ ไม่กรองรหัสโรค — ตั้งต้นจาก visit (ovst / ipt) แล้ว left join dx ให้เจอคนที่หมอยังไม่ลงรหัสด้วย
+// ตั้งต้นจาก visit (ovst / ipt) แล้ว left join dx — /patients ค้นชื่อจึงเจอคนที่หมอยังไม่ลงรหัสด้วย · /patients/scope กรอง visit ด้วยรหัสที่ตั้งไว้
 // OPD: dx อยู่ที่ ovstdiag (key vn) · IPD: dx จำหน่ายอยู่ที่ iptdiag (key an) ต่อกลับหา vn ผ่าน ipt.vn
 // ประเภทจำหน่าย: IPD = ipt.dchtype (dchtype) · OPD = ovst.ovstost (ovstost)
-// w = จำนวนคำของชื่อที่ค้น (อย่างน้อย 1) — ทุกคำต้องเจอในชื่อหรือสกุล (พิมพ์ "สมชาย ใจดี" ได้)
-const sqlFor = (w: number): string => `
+// ipd/opd = เงื่อนไขเพิ่มของ visit (ต่อท้ายช่วงวันที่) · where = เงื่อนไขท้ายคิวรี (ค้นชื่อ)
+// เก็บ dx ทุกตัวของ visit ที่ผ่าน ไม่ใช่เฉพาะตัวที่ตรง — diags จะได้ครบ
+const sqlFor = (ipd: string, opd: string, where: string): string => `
 select
   case when d.src = 1 or o.an > '' then 'IPD' else 'OPD' end as patient_type,
   d.icd10, i.name as diag_name, coalesce(d.an, nullif(o.an, '')) as an, d.vn, d.hn, p.cid,
@@ -50,11 +51,11 @@ select
 from (
   select 1 as src, t.an, t.vn, t.hn, x.icd10, x.diagtype, t.regdate as dx_date, t.regtime as dx_time
   from ipt t left join iptdiag x on x.an = t.an
-  where t.regdate between ? and ?
+  where t.regdate between ? and ?${ipd}
   union all
   select 2, null, v.vn, v.hn, x.icd10, x.diagtype, v.vstdate, v.vsttime
   from ovst v left join ovstdiag x on x.vn = v.vn
-  where v.vstdate between ? and ?
+  where v.vstdate between ? and ?${opd}
 ) d
 join patient p         on p.hn = d.hn
 left join icd101 i     on i.code = d.icd10
@@ -64,7 +65,7 @@ left join opdscreen sc on sc.vn = d.vn
 left join ipt a        on a.an = coalesce(d.an, nullif(o.an, ''))
 left join dchtype dt   on dt.dchtype = a.dchtype
 left join ovstost os   on os.ovstost = o.ovstost
-where ${Array(w).fill('(p.fname like ? or p.lname like ?)').join(' and ')}`
+${where}`
 
 type Row = Record<string, unknown>
 const t = (v: unknown): string => (v == null ? '' : String(v))
@@ -207,14 +208,38 @@ export async function searchIcd(c: Conn, q: string): Promise<Icd[]> {
   return rows.map((r) => ({ code: String(r.code), name: str(r.name) ?? '' }))
 }
 
-/** แถวตามสัญญา HisPatient ของเว็บ dc + ช่องอื่นของฟอร์มแจ้งเคส */
+/** /patients — ค้นด้วยชื่อ/สกุล ทุก visit ไม่กรองรหัสโรค */
 export async function patients(c: Conn, from: string, to: string, name: string): Promise<Record<string, unknown>[]> {
   // เหลือแค่ไทย + ASCII — ฐาน HOSxP หลายแห่งเป็น tis620 ตัวอื่น (emoji, é) ทำ like พัง "Illegal mix of collations"
   const words = name.replace(/[^฀-๿\x21-\x7E]+/g, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 3)
   if (!words.length) return []   // ไม่มีชื่อ = ไม่ส่งรายชื่อคนไข้ทั้งวันออกไป
   const like = words.flatMap((w) => [`%${w}%`, `%${w}%`])
+  // ทุกคำต้องเจอในชื่อหรือสกุล (พิมพ์ "สมชาย ใจดี" ได้)
+  const where = `where ${words.map(() => '(p.fname like ? or p.lname like ?)').join(' and ')}`
   // พิมพ์สั้น ๆ อย่าง "สม" เจอเป็นร้อย — ตัดที่ MAX_ROWS (ใหม่สุดก่อน) ให้พิมพ์ละเอียดขึ้นแทน
-  const rows = pickRows(await query(c, sqlFor(words.length), [from, to, from, to, ...like])).slice(0, MAX_ROWS)
+  const rows = pickRows(await query(c, sqlFor('', '', where), [from, to, from, to, ...like])).slice(0, MAX_ROWS)
+  return shape(c, rows, from, to)
+}
+
+/**
+ * /patients/scope — visit ที่มี dx ตัวใดตัวหนึ่งอยู่ในรหัสที่ตั้งไว้ (แท็บข้อมูลที่ดึง) ไม่ต้องใส่ชื่อ
+ * ไม่ตัดที่ MAX_ROWS: เป็นรายการเคสที่ต้องรายงาน ตัดทิ้งเงียบ ๆ ไม่ได้ · จำนวนจำกัดอยู่แล้วด้วยรหัสกับวันเดียว
+ */
+export async function scopePatients(c: Conn, day: string, icd: string[]): Promise<Record<string, unknown>[]> {
+  const codes = icd.filter((x) => ICD_RE.test(x))
+  if (!codes.length) return []   // ไม่ได้เลือกรหัส = ไม่มีคนไข้ (และ in () ว่างเป็น SQL ผิด)
+  const marks = codes.map(() => '?').join(',')
+  // visit ที่ตรง = มีรหัสใน ovstdiag หรือ iptdiag ตัวใดตัวหนึ่ง — กรองทั้งสองฝั่งด้วยชุด vn เดียวกัน
+  // ไม่งั้น visit ที่รหัสตรงอยู่ฝั่ง IPD จะหลุด dx ฝั่ง OPD (และกลับกัน) diags ไม่ครบ
+  const hit = ` and %s in (select vn from ovstdiag where icd10 in (${marks})
+    union select y.vn from ipt y join iptdiag z on z.an = y.an where z.icd10 in (${marks}))`
+  const sql = sqlFor(hit.replace('%s', 't.vn'), hit.replace('%s', 'v.vn'), '')
+  const rows = pickRows(await query(c, sql, [day, day, ...codes, ...codes, day, day, ...codes, ...codes]))
+  return shape(c, rows, day, day)
+}
+
+/** แถวตามสัญญา HisPatient ของเว็บ dc + ช่องอื่นของฟอร์มแจ้งเคส */
+async function shape(c: Conn, rows: Row[], from: string, to: string): Promise<Record<string, unknown>[]> {
   const lab = await labs(c, [...new Set(rows.map((r) => String(r.hn)))], from, to)
   return rows.map((r) => {
     const dx = str(r.dx_date)?.slice(0, 10)
@@ -303,7 +328,29 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
     if (req.method !== 'GET') return send(405, { error: 'method not allowed' })
 
     if (url.pathname === '/health') {
-      return send(200, { status: 'ok', engine: s.conn.engine, database: s.conn.database, from: s.from, to: s.to })
+      // dx_code = รหัสที่ตั้งในแท็บข้อมูลที่ดึง — เว็บ dc ใช้เป็นค่าตั้งต้นของ "รหัสวินิจฉัยที่ต้องการดึง"
+      return send(200, { status: 'ok', engine: s.conn.engine, database: s.conn.database, from: s.from, to: s.to,
+                         dx_code: s.icd10.map((i) => i.code) })
+    }
+    if (url.pathname === '/patients/scope') {
+      if (!tokenOk(req.headers.authorization, s.token)) {
+        log('GET /patients/scope ปฏิเสธ: token ไม่ถูกต้อง')
+        return send(401, { error: 'invalid token' })
+      }
+      // ?vstdate= วันรับบริการ (บังคับ) · ?dx_code= รหัสโรค array (ซ้ำหลายตัว หรือคั่น ,) ไม่ส่ง = ที่ตั้งในแท็บข้อมูลที่ดึง
+      const day = url.searchParams.get('vstdate') ?? ''
+      if (!DATE.test(day)) return send(400, { error: 'vstdate ต้องเป็น yyyy-mm-dd' })
+      const asked = url.searchParams.getAll('dx_code').flatMap((v) => v.split(','))
+        .map((v) => v.replace(/[.\s]/g, '').toUpperCase()).filter(Boolean)
+      const codes = asked.length ? [...new Set(asked)].slice(0, 100) : s.icd10.map((i) => i.code)
+      try {
+        const rows = await scopePatients(s.conn, day, codes)
+        log(`GET /patients/scope ${day} (${asked.length ? `${codes.length} รหัสจากเว็บ` : 'รหัสที่ตั้งไว้'}) → ${rows.length} ราย`)
+        return send(200, rows)
+      } catch (e) {
+        log(`GET /patients/scope ผิดพลาด: ${(e as Error).message}`)
+        return send(500, { error: (e as Error).message })
+      }
     }
     if (url.pathname === '/patients') {
       if (!tokenOk(req.headers.authorization, s.token)) {
