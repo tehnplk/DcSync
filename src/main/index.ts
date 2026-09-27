@@ -4,7 +4,7 @@ import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { DEFAULT_ICD, type Icd, type Result, type Settings, type Update } from '../preload/types'
-import { PORT, searchIcd, start, stop, testConn } from './agent'
+import { PORT, searchIcd, start, stop, testConn, urls } from './agent'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -19,6 +19,7 @@ const DEFAULTS: Settings = {
   conn: { engine: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', password: '', database: 'hos' },
   from: today(-30),
   to: today(),
+  port: PORT,
   origins: 'https://dc.plkhealth.go.th, http://localhost:3000',
   token: newToken(),
   icd10: DEFAULT_ICD
@@ -180,11 +181,12 @@ app.whenReady().then(() => {
     try {
       await testConn(s.conn) // ต่อ DB ไม่ได้ ไม่ต้องเปิดพอร์ตให้เว็บเรียกแล้วพังทุกครั้ง
       await start(() => settings, log)
-      log(`เริ่มให้บริการที่ http://localhost:${PORT}`)
-      return { ok: true, message: `กำลังให้บริการที่ http://localhost:${PORT}` }
+      const at = urls(s.port).join(' · ')
+      log(`เริ่มให้บริการที่ ${at}`)
+      return { ok: true, message: `กำลังให้บริการที่ ${at}` }
     } catch (e) {
       const err = e as NodeJS.ErrnoException
-      return err.code === 'EADDRINUSE' ? { ok: false, message: `พอร์ต ${PORT} มีโปรแกรมอื่นใช้อยู่` } : fail(e)
+      return err.code === 'EADDRINUSE' ? { ok: false, message: `พอร์ต ${s.port} มีโปรแกรมอื่นใช้อยู่ — เปลี่ยนพอร์ตแล้วลองใหม่` } : fail(e)
     }
   })
   ipcMain.handle('server:stop', async () => {

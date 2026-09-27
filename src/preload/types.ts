@@ -27,6 +27,7 @@ export type Settings = {
   conn: Conn
   from: string // yyyy-mm-dd ช่วง vstdate ของ /patients — เปิดโปรแกรมใหม่ = ย้อนหลัง 30 วันถึงวันนี้เสมอ
   to: string
+  port: number // พอร์ตที่เปิดให้เว็บ dc เรียก (ตั้งต้น 5000) — ต้องตรงกับ API URL ที่ตั้งในเว็บ
   origins: string // เว็บที่อนุญาตให้อ่านข้อมูล คั่นด้วย ,
   token: string // ผู้เรียก /patients ต้องส่ง Authorization: Bearer <token>
   icd10: Icd[] // รหัสโรคที่ดึง

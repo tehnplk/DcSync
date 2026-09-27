@@ -1,9 +1,11 @@
 import http from 'node:http'
+import { networkInterfaces } from 'node:os'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import mysql from 'mysql2/promise'
 import pg from 'pg'
 import type { Conn, Icd, Settings } from '../preload/types'
 
+/** พอร์ตตั้งต้น — เปลี่ยนได้ในโปรแกรม (Settings.port) */
 export const PORT = 5000
 
 // ICD10 → รหัสโรคของ dc (c_disease506 ที่ must_report) — แค่ช่วยเติมให้ รหัสอื่นที่ตั้งเพิ่มไม่มีก็ได้
@@ -273,7 +275,7 @@ let server: http.Server | null = null
 export function start(get: () => Settings, log: (m: string) => void): Promise<void> {
   const srv = http.createServer(async (req, res) => {
     const s = get()
-    const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
+    const url = new URL(req.url ?? '/', 'http://localhost')   // ใช้แค่แยก path/query
     const send = (code: number, body: unknown): void => {
       res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify(body))
@@ -330,12 +332,21 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
 
   return new Promise((resolve, reject) => {
     srv.once('error', reject) // เช่น EADDRINUSE พอร์ตมีโปรแกรมอื่นใช้อยู่
-    // 127.0.0.1 เท่านั้น — เครื่องอื่นในวงแลนเข้าไม่ได้
-    srv.listen(PORT, '127.0.0.1', () => {
+    // ทุก ip — เครื่องอื่นในวงแลนเรียกเครื่องนี้ได้ (ตั้ง URL ที่เว็บ dc เป็น http://<ip เครื่องนี้>:5000)
+    // /patients ยังต้องมี token + origin ที่อนุญาต · ครั้งแรก Windows Firewall จะถามให้อนุญาต
+    // ponytail: http ธรรมดา token วิ่งในแลนแบบไม่เข้ารหัส — ถ้าต้องกันดักในแลนค่อยทำ https
+    srv.listen(get().port || PORT, '0.0.0.0', () => {
       server = srv
       resolve()
     })
   })
+}
+
+/** url ที่เครื่องอื่นใช้เรียกเครื่องนี้ได้ — localhost ก่อน ตามด้วย IPv4 ทุกการ์ดแลน */
+export function urls(port: number): string[] {
+  const ips = Object.values(networkInterfaces()).flat()
+    .filter((n) => n && n.family === 'IPv4' && !n.internal).map((n) => n!.address)
+  return ['localhost', ...ips].map((h) => `http://${h}:${port || PORT}`)
 }
 
 export function stop(): Promise<void> {

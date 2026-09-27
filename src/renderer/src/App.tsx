@@ -58,8 +58,7 @@ function App(): React.JSX.Element {
       setRunning(false)
       setMsg(null)
     } else if ((await run(() => window.api.start(s))).ok) {
-      setRunning(true)
-      setMsg(null)   // สถานะมุมขวาบอกอยู่แล้ว ไม่ต้องขึ้นแถบซ้ำ — แถบไว้บอกผลทดสอบ/ข้อผิดพลาด
+      setRunning(true)   // แถบข้อความค้างไว้: บอก url ทุก ip ให้เครื่องอื่นในแลนเอาไปตั้งที่เว็บ dc
     }
   }
 
@@ -78,7 +77,7 @@ function App(): React.JSX.Element {
           </button>
         )}
         <span className={`status ${running ? 'on' : ''}`}>
-          <i aria-hidden />{running ? 'กำลังให้บริการที่ localhost:5000' : 'หยุดอยู่'}
+          <i aria-hidden />{running ? `กำลังให้บริการ พอร์ต ${s.port}` : 'หยุดอยู่'}
         </span>
         <button type="button" className={running ? 'stop' : 'start'} disabled={busy} onClick={toggle}>
           {running ? 'Stop' : 'Start'}
@@ -135,6 +134,18 @@ function App(): React.JSX.Element {
                 ทดสอบการเชื่อมต่อ
               </button>
             </div>
+          </fieldset>
+        )}
+        {tab === 'his' && (
+          <fieldset disabled={running}>
+            <legend>ให้บริการเว็บ dc</legend>
+            <div className="grid">
+              <label>
+                Port (ตั้งต้น 5000)
+                <input inputMode="numeric" value={s.port || ''} onChange={(e) => setS({ ...s, port: Number(e.target.value) || 0 })} />
+              </label>
+            </div>
+            <p className="hint">เปิดรับทุก IP — เครื่องอื่นในแลนตั้ง API URL ในเว็บ dc เป็น http://&lt;IP เครื่องนี้&gt;:{s.port || 5000}</p>
           </fieldset>
         )}
 
