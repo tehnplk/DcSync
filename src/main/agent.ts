@@ -3,7 +3,7 @@ import { networkInterfaces } from 'node:os'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import mysql from 'mysql2/promise'
 import pg from 'pg'
-import type { Conn, Icd, Settings } from '../preload/types'
+import type { Conn, Icd, Result, Settings } from '../preload/types'
 
 /** พอร์ตตั้งต้น — เปลี่ยนได้ในโปรแกรม (Settings.port) */
 export const PORT = 5000
@@ -153,6 +153,12 @@ export const thDate = (iso?: string): string | undefined =>
 export const addDays = (iso: string, n: number): string =>
   new Date(Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
 
+/** วันนี้ (+d วัน) ตามเวลาเครื่อง yyyy-mm-dd */
+export const today = (d = 0): string => {
+  const t = new Date(Date.now() + d * 86400000)
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+}
+
 /** ช่วงวันที่ของ lab ที่นับให้เคส: วันรับบริการ ถึง +7 วัน (รวมนัดเจาะเลือดซ้ำ/ระหว่างนอน) */
 export const LAB_DAYS = 7
 
@@ -163,8 +169,7 @@ export const LAB_DAYS = 7
  * ยิงแยกคิวรีเดียวทั้งก้อน ไม่ group_concat ในคิวรีหลัก: MySQL ตัดที่ 1024 ตัวอักษร และ pg ใช้ string_agg คนละชื่อ
  */
 async function labs(c: Conn, hns: string[], from: string, to: string): Promise<Map<string, Lab[]>> {
-  const m = new Map<string, Lab[]>()
-  if (!hns.length) return m
+  if (!hns.length) return new Map()
   const rows = await query(
     c,
     `select h.hn, h.order_date, h.order_time, o.lab_items_code, li.lab_items_name, o.lab_order_result
@@ -175,6 +180,12 @@ async function labs(c: Conn, hns: string[], from: string, to: string): Promise<M
      order by h.order_date, h.order_time, h.lab_order_number, li.display_order, li.lab_items_code`,
     [...hns, from, addDays(to, LAB_DAYS)]
   )
+  return labMap(rows)
+}
+
+/** แถว lab ตามผลคิวรี → คีย์ = hn (ของจริงและโหมดสาธิตใช้ตัวเดียวกัน) */
+function labMap(rows: Row[]): Map<string, Lab[]> {
+  const m = new Map<string, Lab[]>()
   for (const r of rows) {
     const at = [str(r.order_date)?.slice(0, 10), str(r.order_time)?.slice(0, 5)].filter(Boolean).join(' ')
     const line = [thDate(str(r.order_date)), str(r.lab_items_name)?.trim(), str(r.lab_order_result)?.trim()]
@@ -209,38 +220,45 @@ export async function searchIcd(c: Conn, q: string): Promise<Icd[]> {
 }
 
 /** /patients — ค้นด้วยชื่อ/สกุล ทุก visit ไม่กรองรหัสโรค */
+// เหลือแค่ไทย + ASCII — ฐาน HOSxP หลายแห่งเป็น tis620 ตัวอื่น (emoji, é) ทำ like พัง "Illegal mix of collations"
+const wordsOf = (name: string): string[] =>
+  name.replace(/[^฀-๿\x21-\x7E]+/g, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 3)
+
 export async function patients(c: Conn, from: string, to: string, name: string): Promise<Record<string, unknown>[]> {
-  // เหลือแค่ไทย + ASCII — ฐาน HOSxP หลายแห่งเป็น tis620 ตัวอื่น (emoji, é) ทำ like พัง "Illegal mix of collations"
-  const words = name.replace(/[^฀-๿\x21-\x7E]+/g, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 3)
+  const words = wordsOf(name)
   if (!words.length) return []   // ไม่มีชื่อ = ไม่ส่งรายชื่อคนไข้ทั้งวันออกไป
   const like = words.flatMap((w) => [`%${w}%`, `%${w}%`])
   // ทุกคำต้องเจอในชื่อหรือสกุล (พิมพ์ "สมชาย ใจดี" ได้)
   const where = `where ${words.map(() => '(p.fname like ? or p.lname like ?)').join(' and ')}`
   // พิมพ์สั้น ๆ อย่าง "สม" เจอเป็นร้อย — ตัดที่ MAX_ROWS (ใหม่สุดก่อน) ให้พิมพ์ละเอียดขึ้นแทน
   const rows = pickRows(await query(c, sqlFor('', '', where), [from, to, from, to, ...like])).slice(0, MAX_ROWS)
-  return shape(c, rows, from, to)
+  return shape(rows, await labs(c, hnsOf(rows), from, to))
 }
 
 /**
  * /patients/scope — visit ที่มี dx ตัวใดตัวหนึ่งอยู่ในรหัสที่ตั้งไว้ (แท็บข้อมูลที่ดึง) ไม่ต้องใส่ชื่อ
  * ไม่ตัดที่ MAX_ROWS: เป็นรายการเคสที่ต้องรายงาน ตัดทิ้งเงียบ ๆ ไม่ได้ · จำนวนจำกัดอยู่แล้วด้วยรหัสกับวันเดียว
+ * o.labs false = ไม่ยิงคิวรี lab (ตัวแจ้งเตือนไม่ใช้ผล lab)
  */
-export async function scopePatients(c: Conn, day: string, icd: string[]): Promise<Record<string, unknown>[]> {
+export async function scopePatients(c: Conn, day: string, icd: string[], o: { labs?: boolean } = {}): Promise<Record<string, unknown>[]> {
   const codes = icd.filter((x) => ICD_RE.test(x))
   if (!codes.length) return []   // ไม่ได้เลือกรหัส = ไม่มีคนไข้ (และ in () ว่างเป็น SQL ผิด)
   const marks = codes.map(() => '?').join(',')
-  // visit ที่ตรง = มีรหัสใน ovstdiag หรือ iptdiag ตัวใดตัวหนึ่ง — กรองทั้งสองฝั่งด้วยชุด vn เดียวกัน
+  // visit ที่ตรง = มีรหัสใน ovstdiag หรือ iptdiag ตัวใดตัวหนึ่ง — กรองทั้งสองฝั่งด้วยเงื่อนไขเดียวกัน
   // ไม่งั้น visit ที่รหัสตรงอยู่ฝั่ง IPD จะหลุด dx ฝั่ง OPD (และกลับกัน) diags ไม่ครบ
-  const hit = ` and %s in (select vn from ovstdiag where icd10 in (${marks})
-    union select y.vn from ipt y join iptdiag z on z.an = y.an where z.icd10 in (${marks}))`
-  const sql = sqlFor(hit.replace('%s', 't.vn'), hit.replace('%s', 'v.vn'), '')
+  // exists ผูก vn ของแถวนอก (กรองวันแล้ว) → ค้นด้วย index vn เฉพาะ visit วันนั้น
+  // ไม่ใช่ in (select vn ... where icd10 in) ที่ดึง vn ทุกปีของรหัสนั้นมาก่อน · ผลเท่าเดิม (in = or ของ exists)
+  const hit = ` and (exists (select 1 from ovstdiag q where q.vn = %s and q.icd10 in (${marks}))
+    or exists (select 1 from ipt y join iptdiag z on z.an = y.an where y.vn = %s and z.icd10 in (${marks})))`
+  const sql = sqlFor(hit.replace(/%s/g, 't.vn'), hit.replace(/%s/g, 'v.vn'), '')
   const rows = pickRows(await query(c, sql, [day, day, ...codes, ...codes, day, day, ...codes, ...codes]))
-  return shape(c, rows, day, day)
+  return shape(rows, o.labs === false ? new Map() : await labs(c, hnsOf(rows), day, day))
 }
 
+const hnsOf = (rows: Row[]): string[] => [...new Set(rows.map((r) => String(r.hn)))]
+
 /** แถวตามสัญญา HisPatient ของเว็บ dc + ช่องอื่นของฟอร์มแจ้งเคส */
-async function shape(c: Conn, rows: Row[], from: string, to: string): Promise<Record<string, unknown>[]> {
-  const lab = await labs(c, [...new Set(rows.map((r) => String(r.hn)))], from, to)
+function shape(rows: Row[], lab: Map<string, Lab[]>): Record<string, unknown>[] {
   return rows.map((r) => {
     const dx = str(r.dx_date)?.slice(0, 10)
     // lab ของคนนี้ตั้งแต่วันรับบริการถึง +7 วัน แล้วเหลือผลล่าสุดของแต่ละรายการ
@@ -290,6 +308,190 @@ async function shape(c: Conn, rows: Row[], from: string, to: string): Promise<Re
   })
 }
 
+/**
+ * โหมดสาธิต — ไม่ต่อ HOSxP: คนไข้ปลอม 3 ราย (DHF A91 นอน รพ. · DF A90 · Zika A925) มาวันนี้ สกุล "ทดสอบ" ทุกคน
+ * เป็นแถวแบบผลคิวรีจริง (sqlFor / labs) แล้วผ่าน pickRows → labMap → shape ชุดเดียวกับของจริง
+ */
+function demo(): { rows: Row[]; lab: Row[] } {
+  const d = today()
+  const yy = String(Number(d.slice(0, 4)) + 543).slice(2)   // vn/an ของ HOSxP ขึ้นต้นด้วยปี พ.ศ. 2 หลัก
+  const vn = (hm: string): string => `${yy}${d.slice(5, 7)}${d.slice(8, 10)}${hm}00`
+  const p = { dx_date: d, addr_road: '', lname: 'ทดสอบ', src: 2, diagtype: '1', patient_type: 'OPD', discharge_type: 'กลับบ้าน' }
+  const dhf = {
+    ...p, src: 1, patient_type: 'IPD', discharge_type: 'ยังไม่จำหน่าย', an: `${yy}0004321`, vn: vn('0815'), hn: '000910001',
+    cid: '1659900000011', gender: 'M', pname: 'ด.ช.', fname: 'ก้องภพ', age_y: 12, age_m: 3, tel: '0810000001',
+    cc_begin_date: today(-4), dx_time: '08:15:00', addr_no: '12/1', area_code: '65010102',
+    cc: 'ไข้สูง 4 วัน ปวดศีรษะ อาเจียน', hpi: '4 วันก่อนมา ไข้สูงลอย ปวดเมื่อยตัว วันนี้ซึมลง มีจุดเลือดออกที่แขน tourniquet test positive',
+    kin_name: 'นางสมศรี ทดสอบ', kin_tel: '0810000011', kin_relation: 'มารดา'
+  }
+  const rows: Row[] = [
+    { ...dhf, icd10: 'A91', diag_name: 'Dengue haemorrhagic fever' },
+    { ...dhf, icd10: 'E86', diag_name: 'Volume depletion', diagtype: '2' },
+    {
+      ...p, icd10: 'A90', diag_name: 'Dengue fever [classical dengue]', vn: vn('0930'), hn: '000910002',
+      cid: '3659900000022', gender: 'F', pname: 'นาง', fname: 'มาลี', age_y: 34, age_m: 7, tel: '0810000002',
+      cc_begin_date: today(-3), dx_time: '09:30:00', addr_no: '45', area_code: '65050304',
+      cc: 'ไข้ 3 วัน ปวดกระบอกตา ปวดเมื่อยกล้ามเนื้อ', hpi: '3 วันก่อนมา มีไข้ ปวดศีรษะ ปวดกระบอกตา เบื่ออาหาร ไม่มีเลือดออก',
+      kin_name: 'นายสมพงษ์ ทดสอบ', kin_tel: '0810000022', kin_relation: 'สามี'
+    },
+    {
+      ...p, icd10: 'A925', diag_name: 'Zika virus disease', vn: vn('1045'), hn: '000910003',
+      cid: '1659900000033', gender: 'F', pname: 'นางสาว', fname: 'วันดี', age_y: 27, age_m: 1, tel: '0810000003',
+      cc_begin_date: today(-2), dx_time: '10:45:00', addr_no: '7/3', area_code: '65030201',
+      cc: 'ไข้ต่ำ ผื่นแดง ตาแดง 2 วัน', hpi: '2 วันก่อนมา มีไข้ต่ำ ๆ ผื่นแดงที่ลำตัว ตาแดงไม่มีขี้ตา ปวดข้อมือ ตั้งครรภ์ 12 สัปดาห์',
+      kin_name: 'นายวิชัย ทดสอบ', kin_tel: '0810000033', kin_relation: 'บิดา'
+    }
+  ]
+  const l = (hn: string, at: string, code: string, item: string, v: string): Row =>
+    ({ hn, order_date: d, order_time: `${at}:00`, lab_items_code: code, lab_items_name: item, lab_order_result: v })
+  const lab = [
+    l('000910001', '08:40', '481', 'Platelet count', '45,000'),
+    l('000910001', '08:40', '482', 'Hct', '48'),
+    l('000910001', '08:40', '901', 'Dengue NS1 Ag', 'Positive'),
+    l('000910001', '14:00', '481', 'Platelet count', '38,000'),   // ผลล่าสุดทับผลเช้า
+    l('000910002', '09:50', '481', 'Platelet count', '120,000'),
+    l('000910002', '09:50', '482', 'Hct', '40'),
+    l('000910002', '09:50', '902', 'Dengue IgM', 'Positive'),
+    l('000910003', '11:05', '481', 'Platelet count', '210,000'),
+    l('000910003', '11:05', '903', 'Zika virus RT-PCR', 'Detected')
+  ]
+  return { rows, lab }
+}
+
+/** /patients โหมดสาธิต — กรองวันที่และชื่อแบบเดียวกับคิวรีจริง */
+export function demoPatients(from: string, to: string, name: string): Record<string, unknown>[] {
+  const words = wordsOf(name).map((w) => w.toLowerCase())
+  const d = today()
+  if (!words.length || d < from || d > to) return []
+  const { rows, lab } = demo()
+  const hit = rows.filter((r) => words.every((w) => [r.fname, r.lname].some((v) => t(v).toLowerCase().includes(w))))
+  return shape(pickRows(hit), labMap(lab))
+}
+
+/** /patients/scope โหมดสาธิต — visit ที่มีรหัสใดรหัสหนึ่งตรง (dx ทุกตัวของ visit นั้นมาด้วย) */
+export function demoScope(day: string, icd: string[], o: { labs?: boolean } = {}): Record<string, unknown>[] {
+  if (day !== today()) return []
+  const { rows, lab } = demo()
+  const vns = new Set(rows.filter((r) => icd.includes(t(r.icd10))).map((r) => r.vn))
+  return shape(pickRows(rows.filter((r) => vns.has(r.vn))), labMap(o.labs === false ? [] : lab))
+}
+
+/** คนไข้ของวันตามรหัส — /patients/scope กับตัวแจ้งเตือนใช้ทางเดียวกัน (DEMO หรือ HOSxP) */
+const scope = async (s: Settings, day: string, codes: string[], o: { labs?: boolean } = {}): Promise<Record<string, unknown>[]> =>
+  s.demo ? demoScope(day, codes, o) : scopePatients(s.conn, day, codes, o)
+
+// MOPH Alert v3.1 — แบบเดียวกับ dc (src/lib/moph-alert.ts) ส่งเข้าไลน์หมอพร้อมตามเลขบัตรประชาชน
+const MOPH_URL = 'https://morpromt2c.moph.go.th/alert/v3.1/messages'
+
+/** ยิงจริง — throw เมื่อไม่สำเร็จ · ข้อความ error ปิดเลข 13 หลัก (response อาจมีเลขบัตรผู้รับ) */
+export async function mophPost(key: string, secret: string, body: unknown): Promise<void> {
+  const r = await fetch(MOPH_URL, {
+    method: 'POST', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/json', 'client-key': key, 'secret-key': secret },
+    body: JSON.stringify(body)
+  })
+  const t = await r.text()
+  if (!r.ok || !/"message_code"\s*:\s*200/.test(t)) throw new Error(`MOPH Alert ตอบ ${r.status} ${t.replace(/\d{13}/g, '***').slice(0, 200)}`)
+}
+
+const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** dx ที่ตรงรหัสที่ตั้งไว้ของแถวคนไข้ (จาก diags ก่อน แล้ว diag_code) — ชื่อโรคไม่มีใน HIS ใช้ชื่อจากรายการรหัสที่ตั้งไว้ */
+export function matchDx(p: Record<string, unknown>, icd10: Icd[]): { code: string; name: string } {
+  const set = new Set(icd10.map((i) => i.code))
+  const diags = (Array.isArray(p.diags) ? p.diags : []) as { code: string; name?: string }[]
+  const d = diags.find((x) => set.has(x.code)) ?? { code: t(p.diag_code), name: t(p.diag_name) }
+  return { code: d.code, name: d.name || icd10.find((i) => i.code === d.code)?.name || '' }
+}
+
+/**
+ * payload "พบการวินิจฉัยโรคตามรหัสที่ท่านตั้งไว้" — 1 ข้อความต่อคนไข้ · หัว/รูปแบบแบบเดียวกับ dxFoundAlert + payload() ของ dc
+ * เนื้อหา: วัน-เวลา dx / รหัส - ชื่อโรค / ชื่อ-นามสกุล · ไม่มีปุ่ม · p = แถวจาก scope (date_dx yyyy-mm-dd, time_dx HH:mm)
+ */
+export function dxFoundMsg(p: Record<string, unknown>, dx: { code: string; name: string }, cid: string, at = new Date()): Record<string, unknown> {
+  const d = new Date(`${t(p.date_dx)}T00:00:00`).toLocaleDateString('th-TH', { dateStyle: 'medium' })
+  const when = p.time_dx ? `${d}-${t(p.time_dx)}` : d
+  const title = 'พบการวินิจฉัยโรคตามรหัสที่ท่านตั้งไว้'
+  const lines = [
+    `วัน-เวลา : ${when}`,
+    `มีการบันทึกการวินิจฉัย ${dx.code} - ${dx.name} ใน HOSXP`,
+    `${t(p.pname)}${t(p.fname)} ${t(p.lname)}`.trim()
+  ]
+  const flex = {
+    type: 'bubble',
+    header: {
+      type: 'box', layout: 'vertical', backgroundColor: '#B45309', paddingAll: 'md',
+      contents: [
+        { type: 'text', text: 'DcSync', color: '#FFFFFF', size: 'xs', weight: 'bold' },
+        { type: 'text', text: title, color: '#FFFFFF', size: 'lg', weight: 'bold', wrap: true }
+      ]
+    },
+    body: {
+      type: 'box', layout: 'vertical', spacing: 'sm',
+      contents: [
+        ...lines.map((text) => ({ type: 'text', text, size: 'sm', color: '#333333', wrap: true })),
+        { type: 'separator', margin: 'md' },
+        { type: 'text', size: 'xs', color: '#999999', align: 'end', margin: 'md',
+          text: at.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) }
+      ]
+    }
+  }
+  return {
+    cid: [cid],
+    messages: [{ type: 'flex', altText: `${title} — ${dx.code} ${dx.name}`.slice(0, 400), contents: flex }],
+    message_title: title,
+    message_html: `<strong>${title}</strong><br>${lines.map(esc).join('<br>')}`,
+    message_text: `${title}\n${lines.join('\n')}`,
+    message_type: 'HPT'
+  }
+}
+
+/** คีย์ที่ส่งแล้ว `วันรับบริการ|hn|cid` → วันรับบริการ (ไว้ตัดของเก่า) — เก็บเป็นไฟล์ใน userData */
+export type Sent = Record<string, string>
+/** เก็บคีย์ที่ส่งแล้วกี่วัน — ใช้จริงแค่วันนี้ เก็บเผื่อเวลาเครื่องถอยหลัง */
+export const SENT_DAYS = 3
+
+export const maskCid = (c: string): string => `${c.slice(0, 1)}xxxxxxxx${c.slice(-4)}`
+
+/**
+ * ตรวจคนไข้วันนี้ที่ dx ตรงรหัสในแท็บข้อมูลที่ดึง → แจ้งผู้รับที่เปิดเตือนทุกคน เฉพาะคนไข้ที่ยังไม่เคยแจ้งผู้รับคนนั้น
+ * กันซ้ำแบบ c_survillence_moph_alert_log ของ dc: 1 คนไข้ (hn) แจ้งผู้รับแต่ละคนได้วันละครั้ง (dx เปลี่ยน/เพิ่มก็ไม่แจ้งซ้ำ)
+ * ส่ง 1 ข้อความต่อคนไข้ต่อผู้รับ · ลงคีย์หลังส่งสำเร็จเท่านั้น ไม่สำเร็จ = รอบหน้าส่งใหม่
+ * แก้ sent ในที่ — คนเรียกเขียนลงไฟล์ · skip = ข้าม (ไม่มีผู้รับ) · ok false = ข้าม หรือมีผู้รับที่ส่งไม่สำเร็จ
+ */
+export async function checkAlerts(
+  s: Settings, sent: Sent, post: (body: unknown) => Promise<void>, log: (m: string) => void, day = today()
+): Promise<Result & { skip?: true }> {
+  for (const [k, d] of Object.entries(sent)) if (d < addDays(day, -SENT_DAYS)) delete sent[k]
+  const to = s.alerts.filter((a) => a.enabled)
+  if (!to.length) return { ok: false, skip: true, message: 'แจ้งเตือน: ไม่มีผู้รับที่เปิดเตือน — ไม่ส่ง' }
+  // 1 คนไข้ (hn) = 1 แถว — แถวแรกคือ visit ใหม่สุด · ข้อความไม่มีผล lab จึงไม่ดึง lab (รันทุก 5 นาที)
+  const byHn = new Map<string, Record<string, unknown>>()
+  for (const r of await scope(s, day, s.icd10.map((i) => i.code), { labs: false })) if (t(r.hn) && !byHn.has(t(r.hn))) byHn.set(t(r.hn), r)
+  const tag = s.demo ? ' [DEMO]' : ''
+  let sentN = 0
+  let failed = 0
+  for (const a of to) {
+    for (const [hn, p] of byHn) {
+      const key = `${day}|${hn}|${a.cid}`
+      if (sent[key]) continue
+      try {
+        await post(dxFoundMsg(p, matchDx(p, s.icd10), a.cid))
+        sent[key] = day
+        sentN++
+        log(`แจ้งเตือน ${a.name} (${maskCid(a.cid)}) 1 ราย${tag}`)
+      } catch (e) {
+        failed++
+        log(`แจ้งเตือน ${a.name} (${maskCid(a.cid)}) ไม่สำเร็จ — ส่งใหม่รอบหน้า: ${(e as Error).message}`)
+      }
+    }
+  }
+  return {
+    ok: !failed,
+    message: `ตรงรหัส ${byHn.size} ราย · ส่งแล้ว ${sentN} ข้อความ${failed ? ` · ไม่สำเร็จ ${failed} ข้อความ` : ''}${tag}`
+  }
+}
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 // เทียบผ่าน hash ให้ยาวเท่ากันเสมอ timingSafeEqual ถึงใช้ได้ — กันเดา token ทีละตัวจากเวลาตอบ
 const sha = (v: string): Buffer => createHash('sha256').update(v).digest()
@@ -329,8 +531,9 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
 
     if (url.pathname === '/health') {
       // dx_code = รหัสที่ตั้งในแท็บข้อมูลที่ดึง — เว็บ dc ใช้เป็นค่าตั้งต้นของ "รหัสวินิจฉัยที่ต้องการดึง"
-      return send(200, { status: 'ok', engine: s.conn.engine, database: s.conn.database, from: s.from, to: s.to,
-                         dx_code: s.icd10.map((i) => i.code) })
+      // demo = โหมดสาธิต (ไม่ต่อ HOSxP) database จึงเป็น DEMO
+      return send(200, { status: 'ok', engine: s.conn.engine, database: s.demo ? 'DEMO' : s.conn.database, from: s.from, to: s.to,
+                         dx_code: s.icd10.map((i) => i.code), demo: s.demo })
     }
     if (url.pathname === '/patients/scope') {
       if (!tokenOk(req.headers.authorization, s.token)) {
@@ -344,8 +547,8 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
         .map((v) => v.replace(/[.\s]/g, '').toUpperCase()).filter(Boolean)
       const codes = asked.length ? [...new Set(asked)].slice(0, 100) : s.icd10.map((i) => i.code)
       try {
-        const rows = await scopePatients(s.conn, day, codes)
-        log(`GET /patients/scope ${day} (${asked.length ? `${codes.length} รหัสจากเว็บ` : 'รหัสที่ตั้งไว้'}) → ${rows.length} ราย`)
+        const rows = await scope(s, day, codes)
+        log(`GET /patients/scope ${day} (${asked.length ? `${codes.length} รหัสจากเว็บ` : 'รหัสที่ตั้งไว้'}) → ${rows.length} ราย${s.demo ? ' [DEMO]' : ''}`)
         return send(200, rows)
       } catch (e) {
         log(`GET /patients/scope ผิดพลาด: ${(e as Error).message}`)
@@ -365,9 +568,9 @@ export function start(get: () => Settings, log: (m: string) => void): Promise<vo
       if (!name.trim()) return send(400, { error: 'ต้องระบุ name' })
       if (!DATE.test(from) || !DATE.test(to)) return send(400, { error: 'วันที่ต้องเป็น yyyy-mm-dd' })
       try {
-        const rows = await patients(s.conn, from, to, name)
+        const rows = s.demo ? demoPatients(from, to, name) : await patients(s.conn, from, to, name)
         // ไม่ลงชื่อที่ค้นในบันทึก — เป็นข้อมูลคนไข้
-        log(`GET /patients ${from} ถึง ${to} (ค้นชื่อ) → ${rows.length} ราย`)
+        log(`GET /patients ${from} ถึง ${to} (ค้นชื่อ) → ${rows.length} ราย${s.demo ? ' [DEMO]' : ''}`)
         return send(200, rows)
       } catch (e) {
         log(`GET /patients ผิดพลาด: ${(e as Error).message}`)

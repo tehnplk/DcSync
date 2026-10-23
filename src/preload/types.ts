@@ -23,6 +23,9 @@ export const DEFAULT_ICD: Icd[] = [
   { code: 'A925', name: 'Zika virus disease' }
 ]
 
+/** ผู้รับแจ้งเตือน MOPH Alert — enabled = เปิดเตือน */
+export type Alert = { cid: string; name: string; enabled: boolean }
+
 export type Settings = {
   conn: Conn
   from: string // yyyy-mm-dd ช่วง vstdate ของ /patients — เปิดโปรแกรมใหม่ = ย้อนหลัง 30 วันถึงวันนี้เสมอ
@@ -31,9 +34,16 @@ export type Settings = {
   origins: string // เว็บที่อนุญาตให้อ่านข้อมูล คั่นด้วย ,
   token: string // ผู้เรียก /patients ต้องส่ง Authorization: Bearer <token>
   icd10: Icd[] // รหัสโรคที่ดึง
+  demo: boolean // โหมดสาธิต — ไม่ต่อ HOSxP /patients คืนคนไข้ปลอม 3 ราย (สกุล ทดสอบ) วันนี้
+  alerts: Alert[] // ผู้รับแจ้งเตือน (แท็บแจ้งเตือน)
+  mophKey: string // MOPH Alert Client key — เก็บเข้ารหัส
+  mophSecret: string // MOPH Alert Secret key — เก็บเข้ารหัส
 }
 
 export type Result = { ok: boolean; message: string }
+
+/** ผลตรวจแจ้งเตือนรอบล่าสุด (แท็บแจ้งเตือน) — at = เวลาเครื่อง */
+export type AlertStatus = Result & { at: string }
 
 /** สถานะอัปเดตที่แถบบนแสดง — null = ไม่มีเวอร์ชันใหม่ */
 export type Update = { state: 'downloading'; version: string; percent: number } | { state: 'ready'; version: string }

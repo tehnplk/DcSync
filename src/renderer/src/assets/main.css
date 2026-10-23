@@ -407,19 +407,103 @@ code {
   min-height: 200px;
 }
 
-/* กล่อง token ใต้พื้นที่แท็บ — ตำแหน่งคงที่ทุกแท็บ · เส้นประบอกว่าไม่ใช่ส่วนของแท็บ */
-.tokenwrap {
-  padding: 0 24px 16px;
-}
-
+/* กล่อง token ในแท็บ เชื่อมต่อ HIS — เส้นประ */
 .token {
-  margin: 0;
   border-style: dashed;
 }
 
 .ver {
   font-size: 12px;
   color: var(--muted);
+}
+
+label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--fg);
+}
+
+/* ===== แท็บแจ้งเตือน ===== */
+.alert-form {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+
+.alert-form .actions {
+  gap: 8px;
+}
+
+.alerts {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+}
+
+.alerts th,
+.alerts td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.alerts th {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.alerts button.del {
+  padding: 3px 10px;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+input.switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--line);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+input.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+
+input.switch:checked {
+  background: var(--primary);
+}
+
+input.switch:checked::after {
+  left: 18px;
+}
+
+.demo {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #b45309;
 }
 
 .upd {

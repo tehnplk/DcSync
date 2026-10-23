@@ -1,6 +1,6 @@
 {
   "name": "dcsync",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "DcSync — ดึงเคสโรคที่ต้องรายงานจาก HIS (HOSxP) ให้เว็บ dc ผ่าน REST บน localhost",
   "main": "./out/main/index.js",
   "author": "tehnplk",
@@ -11,6 +11,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --test src/main/agent.test.mjs",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",

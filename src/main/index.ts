@@ -3,15 +3,10 @@ import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
-import { DEFAULT_ICD, type Icd, type Result, type Settings, type Update } from '../preload/types'
-import { PORT, searchIcd, start, stop, testConn, urls } from './agent'
+import { DEFAULT_ICD, type AlertStatus, type Icd, type Result, type Settings, type Update } from '../preload/types'
+import { PORT, checkAlerts, mophPost, searchIcd, start, stop, testConn, today, urls, type Sent } from './agent'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-
-const today = (d = 0): string => {
-  const t = new Date(Date.now() + d * 86400000)
-  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
-}
 
 export const newToken = (): string => randomBytes(24).toString('base64url')
 
@@ -22,21 +17,32 @@ const DEFAULTS: Settings = {
   port: PORT,
   origins: 'https://dc.plkhealth.go.th, http://localhost:3000',
   token: newToken(),
-  icd10: DEFAULT_ICD
+  icd10: DEFAULT_ICD,
+  demo: false,
+  alerts: [],
+  mophKey: '',
+  mophSecret: ''
 }
 
-// ตั้งค่าเก็บใน userData/settings.json — รหัสผ่านเข้ารหัสด้วย safeStorage (ผูกกับบัญชี Windows)
+// ตั้งค่าเก็บใน userData/settings.json — รหัสผ่าน HIS และคีย์ MOPH Alert เข้ารหัสด้วย safeStorage (ผูกกับบัญชี Windows)
 const file = (): string => join(app.getPath('userData'), 'settings.json')
 let settings: Settings = DEFAULTS
+
+const enc = (v: string): string =>
+  safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(v).toString('base64') : v
+const dec = (v: string = ''): string =>
+  v.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')) : v
 
 function load(): Settings {
   if (!existsSync(file())) return DEFAULTS
   try {
     const s = JSON.parse(readFileSync(file(), 'utf8'))
-    const pw: string = s.conn?.password ?? ''
-    const password = pw.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(pw.slice(4), 'base64')) : pw
     // ช่วงวันที่ไม่จำข้ามรอบ — เปิดโปรแกรมใหม่ = ย้อนหลัง 30 วันถึงวันนี้เสมอ
-    return { ...DEFAULTS, ...s, from: today(-30), to: today(), conn: { ...DEFAULTS.conn, ...s.conn, password } }
+    return {
+      ...DEFAULTS, ...s, from: today(-30), to: today(),
+      conn: { ...DEFAULTS.conn, ...s.conn, password: dec(s.conn?.password) },
+      mophKey: dec(s.mophKey), mophSecret: dec(s.mophSecret)
+    }
   } catch {
     return DEFAULTS
   }
@@ -44,10 +50,53 @@ function load(): Settings {
 
 function save(s: Settings): void {
   settings = s
-  const pw = safeStorage.isEncryptionAvailable()
-    ? 'enc:' + safeStorage.encryptString(s.conn.password).toString('base64')
-    : s.conn.password
-  writeFileSync(file(), JSON.stringify({ ...s, conn: { ...s.conn, password: pw } }, null, 2))
+  const out = { ...s, conn: { ...s.conn, password: enc(s.conn.password) }, mophKey: enc(s.mophKey), mophSecret: enc(s.mophSecret) }
+  writeFileSync(file(), JSON.stringify(out, null, 2))
+}
+
+/**
+ * ตัวแจ้งเตือน — ทำงานเฉพาะตอน Start: ตรวจทันที แล้วทุก 5 นาที ใช้วันนี้ของแต่ละรอบ (ข้ามเที่ยงคืนเปลี่ยนวันเอง)
+ * คีย์ที่ส่งแล้วเก็บใน userData/moph-sent.json — เปิดโปรแกรมใหม่ไม่ส่งซ้ำ
+ */
+const ALERT_EVERY = 5 * 60 * 1000
+const sentFile = (): string => join(app.getPath('userData'), 'moph-sent.json')
+let alertTimer: NodeJS.Timeout | null = null
+let checking = false
+let alertStatus: AlertStatus | null = null
+let skipped = ''   // ข้อความข้ามล่าสุด — ลง log ครั้งเดียว ไม่ทุกรอบ
+
+async function alertTick(): Promise<void> {
+  if (checking) return   // รอบก่อนยังไม่จบ (HIS/MOPH ช้า) — ไม่ซ้อน ไม่งั้นส่งซ้ำได้
+  checking = true
+  let r: Result & { skip?: true }
+  try {
+    let sent: Sent = {}
+    try {
+      sent = JSON.parse(readFileSync(sentFile(), 'utf8'))
+    } catch {
+      // ยังไม่มีไฟล์ / ไฟล์เสีย = เริ่มใหม่
+    }
+    const { mophKey, mophSecret } = settings
+    r = mophKey && mophSecret
+      ? await checkAlerts(settings, sent, (b) => mophPost(mophKey, mophSecret, b), log)
+      : { ok: false, skip: true, message: 'แจ้งเตือน: ยังไม่ได้ตั้ง Client key / Secret key — ไม่ส่ง' }
+    writeFileSync(sentFile(), JSON.stringify(sent))
+    const skip = 'skip' in r ? r.message : ''
+    if (skip && skip !== skipped) log(skip)
+    skipped = skip
+  } catch (e) {
+    r = fail(e)
+    log(`แจ้งเตือน: ตรวจไม่สำเร็จ — ${r.message}`)
+  } finally {
+    checking = false
+  }
+  alertStatus = { ...r, at: new Date().toLocaleString('th-TH') }
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('alert', alertStatus))
+}
+
+function stopAlerts(): void {
+  if (alertTimer) clearInterval(alertTimer)
+  alertTimer = null
 }
 
 const fail = (e: unknown): Result => ({ ok: false, message: (e as Error).message || String(e) })
@@ -159,6 +208,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => settings)
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('update:get', () => update)
+  ipcMain.handle('alert:get', () => alertStatus)
   ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(true, true))
   ipcMain.handle('settings:save', (_, s: Settings) => save(s))
   ipcMain.handle('token:new', () => newToken())
@@ -179,17 +229,22 @@ app.whenReady().then(() => {
   ipcMain.handle('server:start', async (_, s: Settings): Promise<Result> => {
     save(s)
     try {
-      await testConn(s.conn) // ต่อ DB ไม่ได้ ไม่ต้องเปิดพอร์ตให้เว็บเรียกแล้วพังทุกครั้ง
+      if (!s.demo) await testConn(s.conn) // ต่อ DB ไม่ได้ ไม่ต้องเปิดพอร์ตให้เว็บเรียกแล้วพังทุกครั้ง · โหมดสาธิตไม่ใช้ DB
       await start(() => settings, log)
-      const at = urls(s.port).join(' · ')
+      const at = urls(s.port).join(', ')
       log(`เริ่มให้บริการที่ ${at}`)
-      return { ok: true, message: `กำลังให้บริการที่ ${at}` }
+      stopAlerts()
+      skipped = ''
+      void alertTick()
+      alertTimer = setInterval(alertTick, ALERT_EVERY)
+      return { ok: true, message: `ให้บริการที่ ${at}` }
     } catch (e) {
       const err = e as NodeJS.ErrnoException
-      return err.code === 'EADDRINUSE' ? { ok: false, message: `พอร์ต ${s.port} มีโปรแกรมอื่นใช้อยู่ — เปลี่ยนพอร์ตแล้วลองใหม่` } : fail(e)
+      return err.code === 'EADDRINUSE' ? { ok: false, message: `พอร์ต ${s.port} ถูกใช้อยู่ ลองเปลี่ยนพอร์ต` } : fail(e)
     }
   })
   ipcMain.handle('server:stop', async () => {
+    stopAlerts()
     await stop()
     log('หยุดให้บริการ')
   })

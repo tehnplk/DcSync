@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { DEFAULT_ICD, type Engine, type Icd, type Result, type Settings, type Update } from '../../preload/types'
+import { DEFAULT_ICD, type Alert, type AlertStatus, type Engine, type Icd, type Result, type Settings, type Update } from '../../preload/types'
 
 const PORTS: Record<Engine, number> = { mysql: 3306, postgres: 5432 }
 
 const TABS = [
   ['his', 'เชื่อมต่อ HIS'],
   ['icd', 'ข้อมูลที่ดึง'],
+  ['alert', 'แจ้งเตือน'],
   ['log', 'บันทึกการทำงาน'],
 ] as const
 type Tab = (typeof TABS)[number][0]
@@ -19,14 +20,17 @@ function App(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('his')
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<Update | null>(null)
+  const [alertStatus, setAlertStatus] = useState<AlertStatus | null>(null)
 
   useEffect(() => {
     window.api.getSettings().then(setS)
     window.api.version().then(setVersion)
     window.api.getUpdate().then(setUpdate)
+    window.api.getAlertStatus().then(setAlertStatus)
     const offUpdate = window.api.onUpdate(setUpdate)
+    const offAlert = window.api.onAlertStatus(setAlertStatus)
     const offLog = window.api.onLog((m) => setLogs((l) => [m, ...l].slice(0, 100)))
-    return () => { offUpdate(); offLog() }
+    return () => { offUpdate(); offAlert(); offLog() }
   }, [])
 
   // บันทึกทุกครั้งที่แก้ — ระหว่าง Start อยู่ เปลี่ยนช่วงวันที่แล้ว /patients ใช้ค่าใหม่ทันที
@@ -68,6 +72,7 @@ function App(): React.JSX.Element {
       <header className="topbar">
         <h1>DcSync</h1>
         {version && <span className="ver">v{version}</span>}
+        {s.demo && <span className="demo">DEMO</span>}
         {update?.state === 'downloading' && (
           <span className="upd">กำลังดาวน์โหลดเวอร์ชัน {update.version} ({update.percent}%)</span>
         )}
@@ -99,7 +104,6 @@ function App(): React.JSX.Element {
         {tab === 'his' && (
           <fieldset disabled={running}>
             <legend>ฐานข้อมูล HIS</legend>
-            {running && <p className="hint">หยุดให้บริการ (Stop) ก่อนจึงแก้การเชื่อมต่อได้</p>}
             <div className="grid">
               <label>
                 ชนิดฐานข้อมูล
@@ -141,20 +145,33 @@ function App(): React.JSX.Element {
             <legend>ให้บริการเว็บ dc</legend>
             <div className="grid">
               <label>
-                Port (ตั้งต้น 5000)
+                Port
                 <input inputMode="numeric" value={s.port || ''} onChange={(e) => setS({ ...s, port: Number(e.target.value) || 0 })} />
               </label>
             </div>
-            <p className="hint">เปิดรับทุก IP — เครื่องอื่นในแลนตั้ง API URL ในเว็บ dc เป็น http://&lt;IP เครื่องนี้&gt;:{s.port || 5000}</p>
+            <label className="check">
+              <input type="checkbox" checked={s.demo} onChange={(e) => setS({ ...s, demo: e.target.checked })} />
+              โหมดสาธิต (DEMO)
+            </label>
           </fieldset>
         )}
-
+        {tab === 'his' && (
+          // div ไม่ใช่ label ชื่อปุ่มจะได้ไม่ปนกับชื่อช่อง
+          <fieldset className="token">
+            <legend id="token-label">Token</legend>
+            <div className="row">
+              <input className="grow mono" aria-labelledby="token-label" readOnly value={s.token}
+                     onFocus={(e) => e.target.select()} />
+              <button type="button" onClick={() => navigator.clipboard.writeText(s.token)}>คัดลอก</button>
+              <button type="button" onClick={async () => setS({ ...s, token: await window.api.newToken() })}>สร้างใหม่</button>
+            </div>
+          </fieldset>
+        )}
 
         {tab === 'icd' && (
           <>
             <fieldset>
               <legend>ช่วงวันที่รับบริการ</legend>
-              <p className="hint">เปิดโปรแกรมใหม่ = ย้อนหลัง 30 วันถึงวันนี้ · แก้แล้วมีผลทันที</p>
               <div className="grid">
                 {/* div ไม่ใช่ label — คลิกในปฏิทินจะได้ไม่เด้งไปกดปุ่มเปิด/ปิดซ้ำ */}
                 <div className="field">
@@ -171,30 +188,39 @@ function App(): React.JSX.Element {
           </>
         )}
 
+        {tab === 'alert' && (
+          <fieldset>
+            <legend>MOPH Alert</legend>
+            <div className="grid">
+              <label>
+                Client key
+                <input type="password" value={s.mophKey} onChange={(e) => setS({ ...s, mophKey: e.target.value })} />
+              </label>
+              <label>
+                Secret key
+                <input type="password" value={s.mophSecret} onChange={(e) => setS({ ...s, mophSecret: e.target.value })} />
+              </label>
+            </div>
+            <p className={alertStatus ? (alertStatus.ok ? 'ok' : 'err') : 'hint'}>
+              {alertStatus
+                ? `ตรวจล่าสุด ${alertStatus.at}: ${alertStatus.message}`
+                : running ? 'กำลังตรวจรอบแรก…' : 'ยังไม่ได้ตรวจ'}
+            </p>
+          </fieldset>
+        )}
+        {tab === 'alert' && <AlertList value={s.alerts} onChange={(alerts) => setS({ ...s, alerts })} />}
+
         {tab === 'log' && (
           <fieldset>
             <legend>บันทึกการทำงาน</legend>
             {logs.length
               ? <pre className="log">{logs.join('\n')}</pre>
-              : <p className="hint">ยังไม่มีรายการ — กด Start แล้วเรียก /patients จากเว็บ dc</p>}
+              : <p className="hint">ยังไม่มีรายการ</p>}
           </fieldset>
         )}
         </div>
 
       </main>
-
-      <div className="tokenwrap">
-        {/* Token อยู่นอกแท็บ ใต้พื้นที่แท็บ — พื้นที่แท็บสูงคงที่เลื่อนในตัว Token จึงอยู่ที่เดิมทุกแท็บ (ต้องใช้ตอนตั้งค่าเว็บ dc) · div ไม่ใช่ label ชื่อปุ่มจะได้ไม่ปนกับชื่อช่อง */}
-        <fieldset className="token">
-          <legend id="token-label">Token (ใส่ในเว็บ dc เพื่อดึง /patients)</legend>
-          <div className="row">
-            <input className="grow mono" aria-labelledby="token-label" readOnly value={s.token}
-                   onFocus={(e) => e.target.select()} />
-            <button type="button" onClick={() => navigator.clipboard.writeText(s.token)}>คัดลอก</button>
-            <button type="button" onClick={async () => setS({ ...s, token: await window.api.newToken() })}>สร้างใหม่</button>
-          </div>
-        </fieldset>
-      </div>
     </div>
   )
 }
@@ -302,7 +328,7 @@ function IcdPicker({ s, value, onChange }: { s: Settings; value: Icd[]; onChange
       const r = await window.api.searchIcd(s, q)
       if ('rows' in r) {
         setHits(r.rows)
-        setErr(r.rows.length ? '' : 'ไม่พบรหัสนี้ใน icd101')
+        setErr(r.rows.length ? '' : 'ไม่พบรหัสนี้')
       } else {
         setHits([])
         setErr(`ค้นไม่ได้: ${r.message}`)
@@ -317,7 +343,7 @@ function IcdPicker({ s, value, onChange }: { s: Settings; value: Icd[]; onChange
     <fieldset>
       <legend>รหัส ICD10 ที่ดึง ({value.length})</legend>
       <div className="chips">
-        {value.length === 0 && <span className="hint">ยังไม่ได้เลือกรหัส — /patients/scope จะไม่มีคนไข้</span>}
+        {value.length === 0 && <span className="hint">ยังไม่ได้เลือกรหัส</span>}
         {value.map((v) => (
           <span key={v.code} className="chip" title={v.name}>
             <b className="mono">{v.code}</b> {v.name}
@@ -329,7 +355,7 @@ function IcdPicker({ s, value, onChange }: { s: Settings; value: Icd[]; onChange
       </div>
       <div className="row">
         <input className="grow" value={q} onChange={(e) => setQ(e.target.value)}
-               placeholder="ค้นรหัสหรือชื่อโรค เช่น A90, dengue" aria-label="ค้นรหัส ICD10" />
+               placeholder="ค้นรหัสหรือชื่อโรค" aria-label="ค้นรหัส ICD10" />
         <button type="button" onClick={() => onChange(DEFAULT_ICD)}>คืนค่าเริ่มต้น</button>
       </div>
       {err && <p className="hint">{err}</p>}
@@ -344,6 +370,92 @@ function IcdPicker({ s, value, onChange }: { s: Settings; value: Icd[]; onChange
           ))}
         </ul>
       )}
+    </fieldset>
+  )
+}
+
+// เลขบัตรประชาชนไทย 13 หลัก — หลักที่ 13 = (11 − (Σ หลักที่ i × (14 − i), i=1..12) mod 11) mod 10
+const cidOk = (c: string): boolean =>
+  /^\d{13}$/.test(c) &&
+  (11 - (([...c].slice(0, 12).reduce((a, d, i) => a + Number(d) * (13 - i), 0)) % 11)) % 10 === Number(c[12])
+
+/** ผู้รับแจ้งเตือน — ปุ่ม + เพิ่ม · สวิตช์เตือนสลับได้ในแถว · บันทึกทุกครั้งที่แก้ (รอบตรวจถัดไปใช้รายชื่อใหม่) */
+function AlertList({ value, onChange }: { value: Alert[]; onChange: (v: Alert[]) => void }): React.JSX.Element {
+  const [adding, setAdding] = useState(false)
+  const [cid, setCid] = useState('')
+  const [name, setName] = useState('')
+  const [enabled, setEnabled] = useState(true)
+  const [err, setErr] = useState('')
+
+  const close = (): void => { setAdding(false); setCid(''); setName(''); setEnabled(true); setErr('') }
+  const save = (): void => {
+    const n = name.trim()
+    if (!cidOk(cid)) return setErr('เลขบัตรประชาชนไม่ถูกต้อง')
+    if (value.some((a) => a.cid === cid)) return setErr('เลขบัตรประชาชนนี้มีอยู่แล้ว')
+    if (!n) return setErr('กรอกชื่อ-นามสกุล')
+    onChange([...value, { cid, name: n, enabled }])
+    close()
+  }
+
+  return (
+    <fieldset>
+      <legend>ผู้รับแจ้งเตือน ({value.length})</legend>
+      <div className="actions">
+        <button type="button" disabled={adding} aria-label="เพิ่มผู้รับแจ้งเตือน" title="เพิ่มผู้รับแจ้งเตือน" onClick={() => setAdding(true)}>
+          +
+        </button>
+      </div>
+      {adding && (
+        <div className="alert-form">
+          <div className="grid">
+            <label>
+              เลขบัตรประชาชน
+              <input className="mono" inputMode="numeric" maxLength={13} value={cid}
+                     onChange={(e) => setCid(e.target.value.replace(/\D/g, ''))} />
+            </label>
+            <label>
+              ชื่อ-นามสกุล
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          </div>
+          <label className="check">
+            <input type="checkbox" role="switch" className="switch" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            เตือน
+          </label>
+          {err && <p className="err">{err}</p>}
+          <div className="actions">
+            <button type="button" onClick={close}>ยกเลิก</button>
+            <button type="button" onClick={save}>บันทึก</button>
+          </div>
+        </div>
+      )}
+      {value.length === 0
+        ? <p className="hint">ยังไม่มีผู้รับ</p>
+        : (
+          <table className="alerts">
+            <thead>
+              <tr><th>เลขบัตรประชาชน</th><th>ชื่อ-นามสกุล</th><th>เตือน</th><th /></tr>
+            </thead>
+            <tbody>
+              {value.map((a) => (
+                <tr key={a.cid}>
+                  <td className="mono">{a.cid}</td>
+                  <td>{a.name}</td>
+                  <td>
+                    <input type="checkbox" role="switch" className="switch" aria-label={`เตือน ${a.name}`} checked={a.enabled}
+                           onChange={(e) => onChange(value.map((x) => (x.cid === a.cid ? { ...x, enabled: e.target.checked } : x)))} />
+                  </td>
+                  <td>
+                    <button type="button" className="del" aria-label={`ลบ ${a.name}`} title="ลบ"
+                            onClick={() => onChange(value.filter((x) => x.cid !== a.cid))}>
+                      ลบ
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
     </fieldset>
   )
 }
