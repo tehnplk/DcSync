@@ -18,7 +18,7 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
-    "release": "npm run build && electron-builder --win --publish always",
+    "release": "npm run build && electron-builder --win --publish never && electron-builder publish -p always -f dist/DcSync-Setup.exe -f dist/DcSync-Setup.exe.blockmap -f dist/latest.yml",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux"
   },

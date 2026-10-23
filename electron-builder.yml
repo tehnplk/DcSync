@@ -42,6 +42,9 @@ appImage:
 npmRebuild: false
 # อัปเดตอัตโนมัติจาก GitHub Releases (repo public — ไม่ต้องฝัง token ในโปรแกรม)
 # ปล่อยเวอร์ชันใหม่: แก้ version ใน package.json แล้ว GH_TOKEN=... npm run release
+# release = build (--publish never) แล้วค่อย `electron-builder publish` แยก: --publish always ตอน build
+# สร้าง publisher 2 ตัวพร้อมกัน (exe กับ blockmap) → ยิงสร้าง release ซ้อน 2 อัน (422 หรือ release ซ้ำแท็ก, exe แยกไปอีกอัน)
+# ponytail: เลี่ยง race ใน electron-builder 26.15.3; ถ้า `publish` error มันจะ log "error publishing" แต่ exit 0 — ดู log/asset ทุกครั้ง
 publish:
   provider: github
   owner: tehnplk
