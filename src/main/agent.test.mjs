@@ -66,6 +66,19 @@ test('scope HOSxP: รหัสกรองด้วย exists ผูก vn ข�
   assert.match(qs[1].sql, /from lab_head/)
 })
 
+test('อาชีพ: demo มีรหัส/ชื่อ HOSxP · คิวรีจริง join occupation · ตัดช่องว่าง ไม่มีอาชีพ = ไม่ส่ง', async (t) => {
+  t.after(() => mock.restoreAll())
+  const occ = Object.fromEntries(demoPatients(d, d, 'ทดสอบ').map((r) => [r.fname, [r.occupation, r.occupation_name, r.occupation_code]]))
+  assert.deepEqual(occ, { ก้องภพ: ['900', 'นักเรียน/นักศึกษา/แม่บ้าน/พ่อบ้าน', '06'], มาลี: ['403', 'รับจ้าง', '03'], วันดี: ['502', 'เกษตรกรรม', '01'] })
+  const rows = [{ vn: '1', hn: '1', occupation: ' 403 ', occupation_name: 'รับจ้าง ', occupation_code: '03' }, { vn: '2', hn: '2', occupation: '', occupation_name: null }]
+  const qs = []
+  mock.method(mysql, 'createConnection', async () => ({ query: async (sql) => { qs.push(sql); return [qs.length === 1 ? rows : []] }, end: async () => {} }))
+  const [a, b] = (await scopePatients(conn, '2026-01-01', ['A90'])).sort((x, y) => x.vn.localeCompare(y.vn))
+  assert.match(qs[0], /left join occupation oc on oc\.occupation = p\.occupation/)
+  assert.deepEqual([a.occupation, a.occupation_name, a.occupation_code], ['403', 'รับจ้าง', '03'])
+  assert.deepEqual([b.occupation, b.occupation_name, b.occupation_code], [undefined, undefined, undefined])
+})
+
 test('แจ้งเตือน HOSxP: ไม่ยิงคิวรี lab', async (t) => {
   t.after(() => mock.restoreAll())
   const qs = fakeDb()

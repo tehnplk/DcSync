@@ -47,6 +47,7 @@ select
   concat(p.chwpart, p.amppart, p.tmbpart, lpad(coalesce(p.moopart, '0'), 2, '0')) as area_code,
   sc.cc, sc.hpi,
   p.informname as kin_name, p.informtel as kin_tel, p.informrelation as kin_relation,
+  p.occupation, oc.name as occupation_name, oc.code506 as occupation_code,
   d.src, d.diagtype
 from (
   select 1 as src, t.an, t.vn, t.hn, x.icd10, x.diagtype, t.regdate as dx_date, t.regtime as dx_time
@@ -65,6 +66,7 @@ left join opdscreen sc on sc.vn = d.vn
 left join ipt a        on a.an = coalesce(d.an, nullif(o.an, ''))
 left join dchtype dt   on dt.dchtype = a.dchtype
 left join ovstost os   on os.ovstost = o.ovstost
+left join occupation oc on oc.occupation = p.occupation
 ${where}`
 
 type Row = Record<string, unknown>
@@ -303,7 +305,12 @@ function shape(rows: Row[], lab: Map<string, Lab[]>): Record<string, unknown>[] 
           .join('\n') || undefined,
       kin_name: str(r.kin_name),
       kin_tel: str(r.kin_tel),
-      kin_relation: str(r.kin_relation)
+      kin_relation: str(r.kin_relation),
+      // patient.occupation = รหัส HOSxP 3 หลัก (403 รับจ้าง) · occupation.code506 = รหัส 506 สองหลัก ชุดเดียวกับ c_occupation ของ dc (03)
+      // เว็บ dc ใช้ occupation_code ก่อน แล้วค่อย occupation_name (ชื่อจริงจากตาราง occupation ของ HOSxP) · ว่าง/ช่องว่างล้วน = ไม่ส่ง
+      occupation: str(t(r.occupation).trim()),
+      occupation_name: str(t(r.occupation_name).trim()),
+      occupation_code: str(t(r.occupation_code).trim())
     }
   })
 }
@@ -322,7 +329,9 @@ function demo(): { rows: Row[]; lab: Row[] } {
     cid: '1659900000011', gender: 'M', pname: 'ด.ช.', fname: 'ก้องภพ', age_y: 12, age_m: 3, tel: '0810000001',
     cc_begin_date: today(-4), dx_time: '08:15:00', addr_no: '12/1', area_code: '65010102',
     cc: 'ไข้สูง 4 วัน ปวดศีรษะ อาเจียน', hpi: '4 วันก่อนมา ไข้สูงลอย ปวดเมื่อยตัว วันนี้ซึมลง มีจุดเลือดออกที่แขน tourniquet test positive',
-    kin_name: 'นางสมศรี ทดสอบ', kin_tel: '0810000011', kin_relation: 'มารดา'
+    kin_name: 'นางสมศรี ทดสอบ', kin_tel: '0810000011', kin_relation: 'มารดา',
+    // อาชีพ = รหัส/ชื่อ/code506 จริงจากตาราง occupation ของ HOSxP
+    occupation: '900', occupation_name: 'นักเรียน/นักศึกษา/แม่บ้าน/พ่อบ้าน', occupation_code: '06'
   }
   const rows: Row[] = [
     { ...dhf, icd10: 'A91', diag_name: 'Dengue haemorrhagic fever' },
@@ -332,14 +341,16 @@ function demo(): { rows: Row[]; lab: Row[] } {
       cid: '3659900000022', gender: 'F', pname: 'นาง', fname: 'มาลี', age_y: 34, age_m: 7, tel: '0810000002',
       cc_begin_date: today(-3), dx_time: '09:30:00', addr_no: '45', area_code: '65050304',
       cc: 'ไข้ 3 วัน ปวดกระบอกตา ปวดเมื่อยกล้ามเนื้อ', hpi: '3 วันก่อนมา มีไข้ ปวดศีรษะ ปวดกระบอกตา เบื่ออาหาร ไม่มีเลือดออก',
-      kin_name: 'นายสมพงษ์ ทดสอบ', kin_tel: '0810000022', kin_relation: 'สามี'
+      kin_name: 'นายสมพงษ์ ทดสอบ', kin_tel: '0810000022', kin_relation: 'สามี',
+      occupation: '403', occupation_name: 'รับจ้าง', occupation_code: '03'
     },
     {
       ...p, icd10: 'A925', diag_name: 'Zika virus disease', vn: vn('1045'), hn: '000910003',
       cid: '1659900000033', gender: 'F', pname: 'นางสาว', fname: 'วันดี', age_y: 27, age_m: 1, tel: '0810000003',
       cc_begin_date: today(-2), dx_time: '10:45:00', addr_no: '7/3', area_code: '65030201',
       cc: 'ไข้ต่ำ ผื่นแดง ตาแดง 2 วัน', hpi: '2 วันก่อนมา มีไข้ต่ำ ๆ ผื่นแดงที่ลำตัว ตาแดงไม่มีขี้ตา ปวดข้อมือ ตั้งครรภ์ 12 สัปดาห์',
-      kin_name: 'นายวิชัย ทดสอบ', kin_tel: '0810000033', kin_relation: 'บิดา'
+      kin_name: 'นายวิชัย ทดสอบ', kin_tel: '0810000033', kin_relation: 'บิดา',
+      occupation: '502', occupation_name: 'เกษตรกรรม', occupation_code: '01'
     }
   ]
   const l = (hn: string, at: string, code: string, item: string, v: string): Row =>
